@@ -9,6 +9,12 @@ npm install
 npm run dev
 ```
 
+Tests:
+
+```bash
+npm test
+```
+
 ---
 
 ## What's in it
@@ -51,6 +57,19 @@ generic declaration pattern.
 The index is incremental — the file watcher re-parses only what changed, so
 edits (including the AI console's) are reflected immediately. On a 1,200-file
 tree it builds in ~0.5 s and answers a find-usages query in ~20 ms.
+
+### Autocomplete
+
+Completion has two layers, so **every language gets suggestions**:
+
+1. **Project symbols** — the index feeds Monaco a completion provider for every
+   language, so typing `Order` suggests the `OrderService` class from anywhere
+   in the tree, with its kind, container and source line. No tooling required.
+2. **Language server** — when one is installed it takes over completion for its
+   languages with real type awareness, and the index provider steps aside.
+
+TypeScript/JavaScript additionally get Monaco's bundled TS worker. Word-based
+suggestions from all open documents are on as well.
 
 ### Language servers
 
@@ -263,6 +282,7 @@ electron/
     testFrameworks.ts test detection, command building and result parsing
     localHistory.ts  per-file revision snapshots
     runConfigs.ts    detected + custom run configurations
+tests/             offline suites + live-app suites driven over CDP
 shared/types.ts      the IPC contract, shared by both sides
 src/
   state/store.ts     Zustand store: tabs, buffers, git, AI messages, settings
@@ -273,6 +293,26 @@ src/
 The renderer has no Node access: `contextIsolation` is on, `nodeIntegration` is
 off, and everything crosses through the typed `window.nova` bridge. Guest pages
 in the browser pane are stripped of any preload and cannot reach it at all.
+
+## Tests
+
+`npm test` builds the main-process modules and runs the suites:
+
+| | |
+| --- | --- |
+| `npm run test:offline` | pure logic — declaration parsing, the symbol index, the edit applier, test-framework detection and parsing |
+| `npm run test:tools` | real tooling — clangd + rust-analyzer over LSP, debugpy over DAP, inlay hints and call hierarchy |
+| `tests/verify-*.mjs` | drive the running IDE over the DevTools protocol |
+
+The live suites need the app running with a debug port:
+
+```bash
+NOVA_DEBUG_PORT=9223 npm run dev
+```
+
+```bash
+node tests/verify-app.mjs
+```
 
 ## Building a distributable
 
