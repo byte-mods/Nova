@@ -18,7 +18,9 @@ export default defineConfig({
         vite: {
           build: {
             rollupOptions: {
-              external: ['electron'],
+              // `node-pty` is a native module: it must stay a runtime require,
+              // or Rollup inlines the JS and loses the .node binary beside it.
+              external: ['electron', 'node-pty'],
             },
           },
         },

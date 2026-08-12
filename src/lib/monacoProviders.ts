@@ -496,9 +496,17 @@ monaco.editor.registerCommand(NOVA_APPLY_ACTION, async (_accessor, language: str
     useStore.getState().notify(`${resolved.title} — ${total} edit${total === 1 ? '' : 's'}`, 'success')
     void useStore.getState().buildIndex()
   } else if (resolved?.command) {
-    useStore
-      .getState()
-      .notify(`“${resolved.title}” needs a server-side command Nova does not run yet`, 'info')
+    // The server does the work and pushes the result back as a
+    // `workspace/applyEdit`, which the LSP layer already applies.
+    const command = typeof resolved.command === 'string' ? resolved.command : resolved.command.command
+    const args = (typeof resolved.command === 'string' ? resolved.arguments : resolved.command.arguments) ?? []
+    try {
+      await window.nova.lsp.executeCommand(language, command, args)
+      useStore.getState().notify(resolved.title ?? command, 'success')
+      void useStore.getState().buildIndex()
+    } catch (error) {
+      useStore.getState().notify(`“${resolved.title}” failed: ${(error as Error).message}`, 'error')
+    }
   }
 })
 

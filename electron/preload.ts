@@ -4,6 +4,7 @@ import type {
   CodeReference,
   CodeSymbol,
   DebugAdapterStatus,
+  DebugBreakpoint,
   DebugScope,
   DebugState,
   DebugVariable,
@@ -147,6 +148,8 @@ const api = {
     detect: (force?: boolean): Promise<LspServerStatus[]> => ipcRenderer.invoke('lsp:detect', force),
     status: (): Promise<LspServerStatus[]> => ipcRenderer.invoke('lsp:status'),
     restart: (id: string): Promise<void> => ipcRenderer.invoke('lsp:restart', id),
+    executeCommand: (language: string, command: string, args: unknown[]): Promise<unknown> =>
+      ipcRenderer.invoke('lsp:executeCommand', language, command, args),
     capabilities: (language: string): Promise<{ id: string; capabilities: any } | null> =>
       ipcRenderer.invoke('lsp:capabilities', language),
 
@@ -219,6 +222,12 @@ const api = {
     toggleBreakpoint: (file: string, line: number): Promise<void> =>
       ipcRenderer.invoke('debug:toggleBreakpoint', file, line),
     clearBreakpoints: (): Promise<void> => ipcRenderer.invoke('debug:clearBreakpoints'),
+    updateBreakpoint: (
+      file: string,
+      line: number,
+      patch: Partial<DebugBreakpoint>,
+    ): Promise<void> => ipcRenderer.invoke('debug:updateBreakpoint', file, line, patch),
+    setRoot: (root: string): Promise<void> => ipcRenderer.invoke('debug:setRoot', root),
     continue: (): Promise<void> => ipcRenderer.invoke('debug:continue'),
     next: (): Promise<void> => ipcRenderer.invoke('debug:next'),
     stepIn: (): Promise<void> => ipcRenderer.invoke('debug:stepIn'),
@@ -250,6 +259,13 @@ const api = {
     onUpdate: (cb: (update: TestRunUpdate) => void) => on('tests:update', cb),
   },
   shell: {
+    open: (id: string, cwd: string, cols: number, rows: number): Promise<{ pty: boolean; reason: string }> =>
+      ipcRenderer.invoke('shell:open', id, cwd, cols, rows),
+    resize: (id: string, cols: number, rows: number): Promise<void> =>
+      ipcRenderer.invoke('shell:resize', id, cols, rows),
+    dispose: (id: string): Promise<void> => ipcRenderer.invoke('shell:dispose', id),
+    capabilities: (): Promise<{ pty: boolean; reason: string; shell: string }> =>
+      ipcRenderer.invoke('shell:capabilities'),
     spawn: (id: string, cwd: string, command: string): Promise<void> =>
       ipcRenderer.invoke('shell:spawn', id, cwd, command),
     kill: (id: string): Promise<void> => ipcRenderer.invoke('shell:kill', id),

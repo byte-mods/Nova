@@ -11,9 +11,16 @@ interface Props {
 }
 
 /**
- * A shell surface backed by one-shot child processes. Each Enter runs the typed
- * command in the project directory; `cd` persists because the main process
- * tracks the working directory per terminal id.
+ * A real terminal.
+ *
+ * When node-pty is available the shell runs on a pseudo-terminal and this
+ * component is a dumb pipe: keystrokes go straight to the tty and output comes
+ * straight back, so the shell owns the prompt, line editing, history, job
+ * control and any full-screen program the user launches.
+ *
+ * Without the native module it falls back to the original model — one child
+ * process per command, with the prompt and history drawn here. That path
+ * cannot run interactive programs, and says so on open.
  */
 export default function TerminalView({ id, visible }: Props) {
   const root = useStore((s) => s.root)
@@ -22,6 +29,7 @@ export default function TerminalView({ id, visible }: Props) {
   const hostRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
+  const ptyRef = useRef(false)
   const stateRef = useRef({
     line: '',
     cwd: root ?? '~',
@@ -37,8 +45,10 @@ export default function TerminalView({ id, visible }: Props) {
       fontFamily: "'JetBrains Mono', 'SF Mono', Menlo, monospace",
       fontSize,
       cursorBlink: true,
-      convertEol: true,
+      // A pty already sends CRLF; converting again double-spaces every line.
+      convertEol: false,
       scrollback: 8000,
+      allowProposedApi: true,
       theme: {
         background: theme.colors.panel,
         foreground: theme.colors.text,
@@ -65,15 +75,40 @@ export default function TerminalView({ id, visible }: Props) {
     const fit = new FitAddon()
     term.loadAddon(fit)
     term.open(hostRef.current)
-    fit.fit()
+    try {
+      fit.fit()
+    } catch {
+      /* zero-sized while hidden */
+    }
     termRef.current = term
     fitRef.current = fit
-
     stateRef.current.cwd = root ?? '~'
-    term.writeln('\x1b[2mNova terminal — commands run in the project folder.\x1b[0m')
-    prompt(term, stateRef.current.cwd)
 
-    const onData = term.onData((data) => {
+    let disposed = false
+    let onData: { dispose(): void } | null = null
+
+    void (async () => {
+      const result = await window.nova.shell
+        .open(id, root ?? process.cwd?.() ?? '.', term.cols, term.rows)
+        .catch(() => ({ pty: false, reason: 'the terminal backend did not start' }))
+      if (disposed) return
+      ptyRef.current = result.pty
+
+      if (result.pty) {
+        // Everything the user types belongs to the tty, including Ctrl+C,
+        // arrow keys and anything a full-screen program is listening for.
+        onData = term.onData((data) => void window.nova.shell.input(id, data))
+      } else {
+        term.writeln(
+          '\x1b[33mRunning without a pseudo-terminal — interactive programs (vim, top, less) are unavailable.\x1b[0m',
+        )
+        term.writeln('\x1b[2mNova terminal — commands run in the project folder.\x1b[0m')
+        prompt(term, stateRef.current.cwd)
+        onData = term.onData((data) => handleFallbackInput(term, data))
+      }
+    })()
+
+    const handleFallbackInput = (term: Terminal, data: string) => {
       const state = stateRef.current
       if (state.busy) {
         if (data === '\x03') void window.nova.shell.kill(id)
@@ -129,15 +164,20 @@ export default function TerminalView({ id, visible }: Props) {
 
       state.line += data
       term.write(data)
-    })
+    }
 
     const offData = window.nova.shell.onData((chunk) => {
       if (chunk.id !== id) return
-      term.write(chunk.data.replace(/(?<!\r)\n/g, '\r\n'))
+      // Only the fallback path emits bare newlines; a tty sends proper CRLF.
+      term.write(ptyRef.current ? chunk.data : chunk.data.replace(/(?<!\r)\n/g, '\r\n'))
     })
 
     const offExit = window.nova.shell.onExit((payload) => {
       if (payload.id !== id) return
+      if (ptyRef.current) {
+        term.writeln(`\r\n\x1b[2m[shell exited with ${payload.code ?? 0}]\x1b[0m`)
+        return
+      }
       const state = stateRef.current
       state.busy = false
       if (payload.code && payload.code !== 0) {
@@ -150,7 +190,12 @@ export default function TerminalView({ id, visible }: Props) {
 
     const runCommand = (e: Event) => {
       const detail = (e as CustomEvent).detail as { command: string }
-      if (!detail?.command || stateRef.current.busy) return
+      if (!detail?.command) return
+      if (ptyRef.current) {
+        void window.nova.shell.input(id, `${detail.command}\r`)
+        return
+      }
+      if (stateRef.current.busy) return
       term.write(`${detail.command}\r\n`)
       stateRef.current.busy = true
       void window.nova.shell.spawn(id, root ?? '.', detail.command)
@@ -160,16 +205,27 @@ export default function TerminalView({ id, visible }: Props) {
     const observer = new ResizeObserver(() => {
       try {
         fit.fit()
+        // The shell needs the new window size or `tput cols`, `less` and every
+        // full-screen program keep drawing at the old one.
+        if (ptyRef.current) void window.nova.shell.resize(id, term.cols, term.rows)
       } catch {
         /* the pane can be zero-sized while hidden */
       }
     })
     observer.observe(hostRef.current)
 
+    // A shell holds its own working directory, so one opened in the previous
+    // project must be retired rather than reused. The effect re-runs on `root`,
+    // which rebuilds the terminal around a fresh shell.
+    const onProjectChanged = () => void window.nova.shell.dispose(id)
+    window.addEventListener('nova:project-changed', onProjectChanged)
+
     return () => {
+      disposed = true
       observer.disconnect()
       window.removeEventListener('nova:run-command', runCommand)
-      onData.dispose()
+      window.removeEventListener('nova:project-changed', onProjectChanged)
+      onData?.dispose()
       offData()
       offExit()
       term.dispose()
@@ -182,13 +238,15 @@ export default function TerminalView({ id, visible }: Props) {
       setTimeout(() => {
         try {
           fitRef.current?.fit()
-          termRef.current?.focus()
+          const term = termRef.current
+          if (term && ptyRef.current) void window.nova.shell.resize(id, term.cols, term.rows)
+          term?.focus()
         } catch {
           /* ignore */
         }
       }, 30)
     }
-  }, [visible])
+  }, [visible, id])
 
   return <div className="terminal-host" ref={hostRef} />
 }

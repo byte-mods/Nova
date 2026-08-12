@@ -1,5 +1,6 @@
 import { ipcMain } from 'electron'
 import { detectRunConfigs, writeSampleRunConfig } from '../lib/runConfigs'
+import { hasPty, loadPty, ptyUnavailableReason, type PtyProcess } from '../lib/pty'
 import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs/promises'
 import os from 'node:os'
@@ -12,12 +13,14 @@ interface Ctx {
 const CWD_MARKER = '__NOVA_CWD__'
 
 interface Session {
-  child: ChildProcess
   id: string
+  /** A real tty when node-pty loaded, otherwise a piped child per command. */
+  pty?: PtyProcess
+  child?: ChildProcess
 }
 
 const sessions = new Map<string, Session>()
-/** Terminal id -> working directory, so `cd` persists between commands. */
+/** Terminal id -> working directory, for the fallback path only. */
 const cwds = new Map<string, string>()
 
 function shellEnv(): NodeJS.ProcessEnv {
@@ -32,28 +35,89 @@ function shellEnv(): NodeJS.ProcessEnv {
     '/bin',
   ]
   const current = (process.env.PATH ?? '').split(path.delimiter).filter(Boolean)
-  return {
+  const env: NodeJS.ProcessEnv = {
     ...process.env,
     PATH: [...new Set([...current, ...extra])].join(path.delimiter),
     TERM: 'xterm-256color',
-    FORCE_COLOR: '1',
+    COLORTERM: 'truecolor',
+    TERM_PROGRAM: 'Nova',
   }
+  // Electron sets these for its own renderer processes; a user shell should not
+  // inherit them or node/npm inside the terminal picks up the wrong runtime.
+  delete env.ELECTRON_RUN_AS_NODE
+  delete env.NODE_OPTIONS
+  return env
+}
+
+function userShell(): string {
+  if (process.platform === 'win32') return process.env.COMSPEC || 'powershell.exe'
+  return process.env.SHELL || '/bin/zsh'
 }
 
 export function registerShellHandlers(ctx: Ctx) {
+  /**
+   * Opens a persistent interactive shell on a pseudo-terminal.
+   *
+   * This is what makes `vim`, `top`, `git rebase -i`, job control and password
+   * prompts work: the shell owns a real tty, draws its own prompt and does its
+   * own line editing, so the renderer is a dumb pipe in both directions.
+   */
+  ipcMain.handle(
+    'shell:open',
+    (_e, id: string, cwd: string, cols = 80, rows = 24): { pty: boolean; reason: string } => {
+      const existing = sessions.get(id)
+      if (existing?.pty) return { pty: true, reason: '' }
+
+      const pty = loadPty()
+      if (!pty) return { pty: false, reason: ptyUnavailableReason() }
+
+      const term = pty.spawn(userShell(), process.platform === 'win32' ? [] : ['-l'], {
+        name: 'xterm-256color',
+        cols: Math.max(20, cols),
+        rows: Math.max(4, rows),
+        cwd,
+        env: shellEnv(),
+      })
+      sessions.set(id, { id, pty: term })
+
+      term.onData((data) => ctx.broadcast('shell:data', { id, data, stream: 'stdout' }))
+      term.onExit(({ exitCode }) => {
+        sessions.delete(id)
+        ctx.broadcast('shell:exit', { id, code: exitCode, cwd })
+      })
+      return { pty: true, reason: '' }
+    },
+  )
+
+  ipcMain.handle('shell:resize', (_e, id: string, cols: number, rows: number) => {
+    const session = sessions.get(id)
+    if (!session?.pty) return
+    try {
+      session.pty.resize(Math.max(20, Math.floor(cols)), Math.max(4, Math.floor(rows)))
+    } catch {
+      /* the pty can exit between the resize event and this call */
+    }
+  })
+
+  /**
+   * Runs one command. On a pty this just types it into the live shell; without
+   * one it falls back to the original piped child per command.
+   */
   ipcMain.handle('shell:spawn', async (_e, id: string, cwd: string, command: string) => {
-    const existing = sessions.get(id)
-    if (existing) existing.child.kill('SIGTERM')
+    const session = sessions.get(id)
+    if (session?.pty) {
+      session.pty.write(`${command}\r`)
+      return
+    }
+
+    if (session?.child) session.child.kill('SIGTERM')
 
     const workdir = cwds.get(id) ?? cwd
     // The marker lets the renderer keep its prompt in sync when a command cds.
     const script = `cd ${JSON.stringify(workdir)} 2>/dev/null || cd ${JSON.stringify(cwd)}; ${command}\n__code=$?; printf "\\n${CWD_MARKER}%s\\n" "$PWD"; exit $__code`
 
-    const child = spawn(process.env.SHELL || '/bin/zsh', ['-lc', script], {
-      cwd: workdir,
-      env: shellEnv(),
-    })
-    sessions.set(id, { child, id })
+    const child = spawn(userShell(), ['-lc', script], { cwd: workdir, env: shellEnv() })
+    sessions.set(id, { id, child })
 
     const push = (data: string, stream: 'stdout' | 'stderr') => {
       const markerIdx = data.indexOf(CWD_MARKER)
@@ -80,15 +144,43 @@ export function registerShellHandlers(ctx: Ctx) {
   })
 
   ipcMain.handle('shell:input', (_e, id: string, data: string) => {
-    sessions.get(id)?.child.stdin?.write(data)
+    const session = sessions.get(id)
+    if (session?.pty) session.pty.write(data)
+    else session?.child?.stdin?.write(data)
   })
 
   ipcMain.handle('shell:kill', (_e, id: string) => {
     const session = sessions.get(id)
     if (!session) return
-    session.child.kill('SIGTERM')
-    setTimeout(() => session.child.kill('SIGKILL'), 2000)
+    if (session.pty) {
+      // On a tty, Ctrl+C belongs to the foreground job — send the character and
+      // let the shell's line discipline decide, rather than killing the shell.
+      session.pty.write('\x03')
+      return
+    }
+    session.child?.kill('SIGTERM')
+    setTimeout(() => session.child?.kill('SIGKILL'), 2000)
   })
+
+  /** Tears a terminal down for good, when its tab closes. */
+  ipcMain.handle('shell:dispose', (_e, id: string) => {
+    const session = sessions.get(id)
+    if (!session) return
+    try {
+      session.pty?.kill()
+      session.child?.kill('SIGKILL')
+    } catch {
+      /* already gone */
+    }
+    sessions.delete(id)
+    cwds.delete(id)
+  })
+
+  ipcMain.handle('shell:capabilities', () => ({
+    pty: hasPty(),
+    reason: ptyUnavailableReason(),
+    shell: userShell(),
+  }))
 
   ipcMain.handle('shell:runConfigs', (_e, root: string) => detectRunConfigs(root))
   ipcMain.handle('shell:createRunConfig', (_e, root: string) => writeSampleRunConfig(root))

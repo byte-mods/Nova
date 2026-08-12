@@ -21,9 +21,13 @@ export function useWatchers() {
         const { buffers } = useStore.getState()
         for (const path of touched) {
           const buffer = buffers[path]
-          // Never clobber unsaved edits; the tab keeps the user's version.
-          if (buffer && buffer.content === buffer.savedContent) {
+          if (!buffer) continue
+          if (buffer.content === buffer.savedContent) {
             void useStore.getState().reloadBuffer(path)
+          } else {
+            // Never clobber unsaved edits — but never hide the divergence
+            // either, or the next save silently overwrites the other change.
+            void useStore.getState().noteExternalChange(path)
           }
         }
         touched.clear()

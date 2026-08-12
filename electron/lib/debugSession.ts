@@ -1,9 +1,13 @@
+import { app } from 'electron'
+import crypto from 'node:crypto'
+import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { DapClient } from './dapClient'
 import { ADAPTERS, adaptersForLanguage, type AdapterSpec } from './debugRegistry'
 import { toolEnv, which, whichXcrun } from './env'
 import type {
   DebugAdapterStatus,
+  DebugBreakpoint,
   DebugScope,
   DebugStackFrame,
   DebugState,
@@ -34,9 +38,11 @@ export class DebugSession {
   private detected = false
 
   private capabilities: Record<string, any> = {}
-  /** file -> line numbers the user has toggled on. */
-  private breakpoints = new Map<string, number[]>()
+  /** file -> the breakpoints the user has set, ordered by line. */
+  private breakpoints = new Map<string, DebugBreakpoint[]>()
   private verified = new Map<string, number[]>()
+  /** The open project, used to scope persisted breakpoints. */
+  private projectRoot = ''
 
   private configured = false
   private status: DebugState['status'] = 'inactive'
@@ -88,10 +94,11 @@ export class DebugSession {
       currentFrameId: this.currentFrameId,
       stopReason: this.stopReason,
       error: this.error,
-      breakpoints: [...this.breakpoints.entries()].map(([file, lines]) => ({
+      breakpoints: [...this.breakpoints.entries()].map(([file, items]) => ({
         file,
-        lines,
+        lines: items.map((b) => b.line),
         verified: this.verified.get(file) ?? [],
+        items,
       })),
       supportsStepBack: Boolean(this.capabilities.supportsStepBack),
       supportsRestart: Boolean(this.capabilities.supportsRestartRequest),
@@ -105,11 +112,31 @@ export class DebugSession {
   /* ---------------- breakpoints ---------------- */
 
   toggleBreakpoint(file: string, line: number) {
-    const lines = this.breakpoints.get(file) ?? []
-    const next = lines.includes(line) ? lines.filter((l) => l !== line) : [...lines, line].sort((a, b) => a - b)
+    const items = this.breakpoints.get(file) ?? []
+    const next = items.some((b) => b.line === line)
+      ? items.filter((b) => b.line !== line)
+      : [...items, { line, enabled: true }].sort((a, b) => a.line - b.line)
     if (next.length) this.breakpoints.set(file, next)
     else this.breakpoints.delete(file)
     if (this.client?.running) void this.sendBreakpoints(file)
+    void this.persist()
+    this.publish()
+  }
+
+  /**
+   * Edits an existing breakpoint — condition, hit count, log message or the
+   * enabled flag. Creates one when the line has none yet, so the properties
+   * dialog can be opened straight from the gutter.
+   */
+  updateBreakpoint(file: string, line: number, patch: Partial<DebugBreakpoint>) {
+    const items = this.breakpoints.get(file) ?? []
+    const existing = items.find((b) => b.line === line)
+    const next = existing
+      ? items.map((b) => (b.line === line ? { ...b, ...patch, line } : b))
+      : [...items, { line, enabled: true, ...patch }].sort((a, b) => a.line - b.line)
+    this.breakpoints.set(file, next)
+    if (this.client?.running) void this.sendBreakpoints(file)
+    void this.persist()
     this.publish()
   }
 
@@ -118,25 +145,79 @@ export class DebugSession {
     this.breakpoints.clear()
     this.verified.clear()
     if (this.client?.running) for (const file of files) void this.sendBreakpoints(file)
+    void this.persist()
     this.publish()
   }
 
   private async sendBreakpoints(file: string) {
     if (!this.client?.running) return
-    const lines = this.breakpoints.get(file) ?? []
+    // A disabled breakpoint stays in the gutter but is not sent, which is how
+    // it can be muted without losing its condition.
+    const items = (this.breakpoints.get(file) ?? []).filter((b) => b.enabled)
     try {
       const body = await this.client.request('setBreakpoints', {
         source: { path: file, name: path.basename(file) },
-        breakpoints: lines.map((line) => ({ line })),
-        lines,
+        breakpoints: items.map((b) => ({
+          line: b.line,
+          ...(b.condition ? { condition: b.condition } : {}),
+          ...(b.hitCondition ? { hitCondition: b.hitCondition } : {}),
+          ...(b.logMessage ? { logMessage: b.logMessage } : {}),
+        })),
+        lines: items.map((b) => b.line),
       })
       const verified = (body?.breakpoints ?? [])
-        .map((bp: any, i: number) => (bp.verified ? (bp.line ?? lines[i]) : null))
+        .map((bp: any, i: number) => (bp.verified ? (bp.line ?? items[i]?.line) : null))
         .filter((l: number | null): l is number => l !== null)
       this.verified.set(file, verified)
       this.publish()
     } catch {
       /* adapter refused; the marker stays unverified */
+    }
+  }
+
+  /* ---------------- persistence ---------------- */
+
+  private storePath() {
+    return path.join(
+      app.getPath('userData'),
+      'breakpoints',
+      `${crypto.createHash('sha1').update(this.projectRoot).digest('hex').slice(0, 16)}.json`,
+    )
+  }
+
+  /**
+   * Breakpoints survive a restart, which is the whole point of setting one in a
+   * place you are still investigating.
+   */
+  async setProjectRoot(root: string) {
+    if (root === this.projectRoot) return
+    this.projectRoot = root
+    this.breakpoints.clear()
+    this.verified.clear()
+    if (!root) {
+      this.publish()
+      return
+    }
+    try {
+      const raw = JSON.parse(await fsp.readFile(this.storePath(), 'utf8')) as Record<string, DebugBreakpoint[]>
+      for (const [file, items] of Object.entries(raw)) {
+        const clean = (items ?? []).filter((b) => Number.isFinite(b?.line))
+        if (clean.length) this.breakpoints.set(file, clean)
+      }
+    } catch {
+      /* nothing saved for this project yet */
+    }
+    this.publish()
+  }
+
+  private async persist() {
+    if (!this.projectRoot) return
+    const target = this.storePath()
+    try {
+      await fsp.mkdir(path.dirname(target), { recursive: true })
+      await fsp.writeFile(target, JSON.stringify(Object.fromEntries(this.breakpoints), null, 2))
+    } catch {
+      /* a lost breakpoint file is not worth surfacing */
     }
   }
 

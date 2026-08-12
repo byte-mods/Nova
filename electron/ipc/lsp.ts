@@ -65,6 +65,12 @@ export function registerLspHandlers(ctx: Ctx) {
   ipcMain.handle('lsp:documentSymbols', (_e, f: string, l: string) =>
     manager.documentSymbols(f, l),
   )
+  ipcMain.handle(
+    'lsp:executeCommand',
+    (_e, language: string, command: string, args: unknown[]) =>
+      manager.executeCommand(language, command, args),
+  )
+
   ipcMain.handle('lsp:workspaceSymbols', (_e, language: string, query: string) =>
     manager.workspaceSymbols(language, query),
   )

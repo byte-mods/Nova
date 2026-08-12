@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import Editor, { type OnMount } from '@monaco-editor/react'
 import type * as monacoNs from 'monaco-editor'
+import type { DebugBreakpoint } from '@shared/types'
 import { useStore } from '@/state/store'
 import { languageForPath } from '@/lib/language'
 import { monaco } from '@/lib/monacoSetup'
@@ -14,6 +15,13 @@ export default function CodeEditor({ path }: { path: string }) {
   const settings = useStore((s) => s.settings)
   const debugState = useStore((s) => s.debug.state)
   const editorRef = useRef<monacoNs.editor.IStandaloneCodeEditor | null>(null)
+  /**
+   * Decorations need the editor to exist. Mounting does not re-render on its
+   * own, so without this the effects below run once against a null ref and
+   * never again — which is what happens when a file is opened that already has
+   * breakpoints, e.g. ones restored from a previous session.
+   */
+  const [mounted, setMounted] = useState(false)
   /** Line number -> test name, for the gutter run buttons. */
   const testDeclarationsRef = useRef<Map<number, string>>(new Map())
 
@@ -23,6 +31,7 @@ export default function CodeEditor({ path }: { path: string }) {
 
   const onMount: OnMount = (editor, monacoApi) => {
     editorRef.current = editor
+    setMounted(true)
     registerCodeIntelligence()
 
     // Glyph margin: the test marker runs that test, anywhere else toggles a
@@ -32,6 +41,11 @@ export default function CodeEditor({ path }: { path: string }) {
       const line = e.target.position?.lineNumber
       if (!line) return
       e.event.preventDefault()
+      // Right-click opens the properties dialog, the way IntelliJ's gutter does.
+      if (e.event.rightButton) {
+        useStore.setState({ breakpointDialog: { file: path, line } })
+        return
+      }
       const name = testDeclarationsRef.current.get(line)
       if (name && !e.event.altKey) {
         void useStore.getState().runTests({ kind: 'name', file: path, name })
@@ -50,11 +64,11 @@ export default function CodeEditor({ path }: { path: string }) {
     })
 
     editor.onDidChangeCursorPosition((e) => {
-      window.dispatchEvent(
-        new CustomEvent('nova:cursor', {
-          detail: { line: e.position.lineNumber, column: e.position.column },
-        }),
-      )
+      const position = { line: e.position.lineNumber, column: e.position.column }
+      // The status bar listens to the event; bookmarks and the palette need it
+      // in the store, where they can read it without an editor reference.
+      useStore.setState({ cursor: position })
+      window.dispatchEvent(new CustomEvent('nova:cursor', { detail: position }))
     })
 
     editor.addCommand(monacoApi.KeyMod.CtrlCmd | monacoApi.KeyCode.KeyS, () => {
@@ -258,28 +272,45 @@ export default function CodeEditor({ path }: { path: string }) {
       clearInterval(timer)
       collection?.clear()
     }
-  }, [path, buffer?.savedContent])
+  }, [path, buffer?.savedContent, mounted])
 
   // Breakpoint markers and the paused-line highlight.
   useEffect(() => {
     const editor = editorRef.current
     if (!editor) return
-    const lines = debugState?.breakpoints.find((b) => b.file === path)
-    const verified = new Set(lines?.verified ?? [])
-    const decorations: monacoNs.editor.IModelDeltaDecoration[] = (lines?.lines ?? []).map(
-      (line) => ({
-        range: new monaco.Range(line, 1, line, 1),
+    const entry = debugState?.breakpoints.find((b) => b.file === path)
+    const verified = new Set(entry?.verified ?? [])
+    const items: DebugBreakpoint[] =
+      entry?.items ?? (entry?.lines ?? []).map((line) => ({ line, enabled: true }))
+    const decorations: monacoNs.editor.IModelDeltaDecoration[] = items.map((bp) => {
+      // A log point and a conditional breakpoint behave differently enough at
+      // runtime that they should not look identical in the gutter.
+      const kind = bp.logMessage ? 'log' : bp.condition || bp.hitCondition ? 'conditional' : ''
+      const classes = ['nova-breakpoint']
+      if (kind) classes.push(kind)
+      if (!bp.enabled) classes.push('disabled')
+      else if (!verified.has(bp.line)) classes.push('unverified')
+
+      const detail = [
+        bp.logMessage ? `Log point: \`${bp.logMessage}\`` : 'Breakpoint',
+        bp.condition ? `Condition: \`${bp.condition}\`` : '',
+        bp.hitCondition ? `Hit count: \`${bp.hitCondition}\`` : '',
+        !bp.enabled ? '_disabled_' : verified.has(bp.line) ? '' : '_not yet bound_',
+        '',
+        'Right-click for properties.',
+      ]
+        .filter(Boolean)
+        .join('  \n')
+
+      return {
+        range: new monaco.Range(bp.line, 1, bp.line, 1),
         options: {
-          glyphMarginClassName: verified.has(line)
-            ? 'nova-breakpoint'
-            : 'nova-breakpoint unverified',
-          glyphMarginHoverMessage: {
-            value: verified.has(line) ? 'Breakpoint' : 'Breakpoint (not yet bound)',
-          },
+          glyphMarginClassName: classes.join(' '),
+          glyphMarginHoverMessage: { value: detail },
           stickiness: 1,
         },
-      }),
-    )
+      }
+    })
 
     const frame = debugState?.frames.find((f) => f.id === debugState.currentFrameId)
     if (debugState?.status === 'paused' && frame?.file === path) {
@@ -295,7 +326,7 @@ export default function CodeEditor({ path }: { path: string }) {
 
     const collection = editor.createDecorationsCollection(decorations)
     return () => collection.clear()
-  }, [path, debugState])
+  }, [path, debugState, mounted])
 
   useEffect(() => {
     const goto = (e: Event) => {

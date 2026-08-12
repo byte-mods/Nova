@@ -17,6 +17,7 @@ import type {
 } from '@shared/types'
 import { applyTheme, defaultThemeId, getTheme } from '@/theme/themes'
 import { basename } from '@/lib/paths'
+import { languageForPath } from '@/lib/language'
 import { lspDidChange, lspDidClose, lspDidOpen, lspDidSave, lspResetDocuments } from '@/lib/lspSync'
 
 export type TabKind = 'file' | 'diff' | 'diagram' | 'browser' | 'settings' | 'commit' | 'history' | 'explain'
@@ -39,6 +40,10 @@ export interface Tab {
   url?: string
   commitHash?: string
   preview?: boolean
+  /** Which editor group shows this tab. */
+  group?: GroupId
+  /** Pinned tabs resist Close Others and sort to the front. */
+  pinned?: boolean
 }
 
 /** A generated walkthrough of one file, streamed in from the AI CLI. */
@@ -65,7 +70,20 @@ export interface Buffer {
 
 export type SidebarView = 'explorer' | 'search' | 'git' | 'diagrams' | 'themes'
 
-export type PaletteMode = 'command' | 'file' | 'symbol'
+export type PaletteMode = 'command' | 'file' | 'symbol' | 'recent' | 'structure' | 'bookmarks'
+
+/** Editor groups. A split adds a second one; there are never more than two. */
+export type GroupId = 'main' | 'right'
+
+export interface Bookmark {
+  file: string
+  /** 1-based. */
+  line: number
+  /** The source line at the time it was set, for the list. */
+  preview: string
+  /** IntelliJ's mnemonic: 0-9 jumps straight to it. */
+  mnemonic?: string
+}
 
 export interface AiMessagePart {
   kind: 'text' | 'thinking' | 'tool' | 'error' | 'log'
@@ -211,11 +229,22 @@ interface State {
   activeTabId: string | null
   buffers: Record<string, Buffer>
 
+  /** Open editor groups, left to right. A single group means no split. */
+  groups: GroupId[]
+  activeGroup: GroupId
+  /** The active tab within each group. */
+  groupActive: Record<GroupId, string | null>
+  /** Most-recently-used file paths, newest first. */
+  recentFiles: string[]
+  bookmarks: Bookmark[]
+  /** Caret position in the active editor, 1-based. */
+  cursor: { line: number; column: number }
+
   sidebarView: SidebarView
   sidebarVisible: boolean
   aiVisible: boolean
   panelVisible: boolean
-  panelTab: 'terminal' | 'problems' | 'usages' | 'hierarchy' | 'tests' | 'debug'
+  panelTab: 'terminal' | 'problems' | 'usages' | 'hierarchy' | 'tests' | 'debug' | 'todo'
 
   indexStatus: IndexStatus | null
   usages: UsageResult | null
@@ -246,6 +275,13 @@ interface State {
   refactorMenuOpen: boolean
   /** Generated walkthroughs, keyed by the file they describe. */
   explain: Record<string, ExplainDoc>
+  /** Breakpoint properties dialog, opened from the gutter. */
+  breakpointDialog: { file: string; line: number } | null
+  /**
+   * Files that changed on disk while their buffer had unsaved edits. Silently
+   * dropping the disk version is how work gets lost, so it is surfaced.
+   */
+  externalChanges: Record<string, { diskContent: string; noticedAt: number }>
   toast: { text: string; tone: 'info' | 'error' | 'success' } | null
 
   init: () => Promise<void>
@@ -260,6 +296,17 @@ interface State {
   openTab: (tab: Tab) => void
   closeTab: (id: string) => void
   setActiveTab: (id: string) => void
+  closeOtherTabs: (id: string) => void
+  closeTabsToRight: (id: string) => void
+  togglePinTab: (id: string) => void
+  moveTab: (id: string, beforeId: string | null) => void
+  splitEditor: () => void
+  closeSplit: () => void
+  setActiveGroup: (group: GroupId) => void
+  moveTabToGroup: (id: string, group: GroupId) => void
+  toggleBookmark: (file?: string, line?: number) => void
+  removeBookmark: (file: string, line: number) => void
+  noteRecentFile: (path: string) => void
   updateBuffer: (path: string, content: string) => void
   saveBuffer: (path: string) => Promise<void>
   saveAll: () => Promise<void>
@@ -320,6 +367,9 @@ interface State {
   explainFile: (path: string, depth?: import('@/lib/explain').ExplainDepth) => Promise<void>
   stopExplain: (path: string) => Promise<void>
   patchExplain: (runId: string, patch: (doc: ExplainDoc) => ExplainDoc) => void
+
+  noteExternalChange: (path: string) => Promise<void>
+  resolveExternalChange: (path: string, action: 'reload' | 'keep' | 'compare') => Promise<void>
   notify: (text: string, tone?: 'info' | 'error' | 'success') => void
 }
 
@@ -336,6 +386,13 @@ export const useStore = create<State>((set, get) => ({
   tabs: [],
   activeTabId: null,
   buffers: {},
+
+  groups: ['main'],
+  activeGroup: 'main',
+  groupActive: { main: null, right: null },
+  recentFiles: [],
+  bookmarks: [],
+  cursor: { line: 0, column: 0 },
 
   sidebarView: 'explorer',
   sidebarVisible: true,
@@ -369,6 +426,8 @@ export const useStore = create<State>((set, get) => ({
   refactorDialog: null,
   refactorMenuOpen: false,
   explain: {},
+  breakpointDialog: null,
+  externalChanges: {},
   toast: null,
 
   async init() {
@@ -405,10 +464,15 @@ export const useStore = create<State>((set, get) => ({
       aiSessionId: { claude: undefined, codex: undefined },
     })
     lspResetDocuments()
+    // Terminals hold a live shell rooted in the old project; retire them so the
+    // next one opens in the new root rather than inheriting the previous cwd.
+    window.dispatchEvent(new CustomEvent('nova:project-changed'))
     const recents = await nova().app.addRecent(path)
     set({ recents })
     await nova().fs.watch(path)
     await nova().lsp.setRoot(path)
+    // Restores this project's saved breakpoints.
+    await nova().debug.setRoot(path)
     void nova().lsp.detect().then((servers) => set({ lspServers: servers }))
     await get().refreshGit()
     void get().refreshCommits()
@@ -421,7 +485,13 @@ export const useStore = create<State>((set, get) => ({
     if (path) await get().openProject(path)
   },
 
-  async openFile(path, opts) {
+  async openFile(requestedPath, opts) {
+    // Resolve symlinks first. On macOS the same file arrives as both
+    // `/var/…` and `/private/var/…` depending on whether it came from the file
+    // watcher, the index or a caller; without canonicalising here the store
+    // ends up with two buffers and two tabs for one file.
+    const path = await nova().fs.realpath(requestedPath).catch(() => requestedPath)
+
     const reveal = () =>
       window.dispatchEvent(
         new CustomEvent('nova:goto-line', {
@@ -431,7 +501,9 @@ export const useStore = create<State>((set, get) => ({
 
     const existing = get().tabs.find((t) => t.kind === 'file' && t.path === path)
     if (existing) {
-      set({ activeTabId: existing.id })
+      // Must go through setActiveTab, or the tab's group never learns it is the
+      // active one and the editor area renders nothing.
+      get().setActiveTab(existing.id)
       if (opts?.line) reveal()
       return
     }
@@ -460,38 +532,166 @@ export const useStore = create<State>((set, get) => ({
   },
 
   openTab(tab) {
-    const tabs = get().tabs
+    const { tabs, activeGroup } = get()
+    const group = tab.group ?? activeGroup
     const existing = tabs.find((t) => t.id === tab.id)
     if (existing) {
       set({
-        tabs: tabs.map((t) => (t.id === tab.id ? { ...t, ...tab, preview: t.preview && tab.preview } : t)),
-        activeTabId: tab.id,
+        tabs: tabs.map((t) =>
+          t.id === tab.id ? { ...t, ...tab, group: t.group ?? group, preview: t.preview && tab.preview } : t,
+        ),
       })
+      get().setActiveTab(tab.id)
       return
     }
-    // A preview tab (single click in the tree) replaces the previous preview tab.
-    const withoutPreview = tab.preview ? tabs.filter((t) => !t.preview) : tabs
-    set({ tabs: [...withoutPreview, tab], activeTabId: tab.id })
+    // A preview tab (single click in the tree) replaces the previous preview
+    // tab — but only within its own group.
+    const withoutPreview = tab.preview ? tabs.filter((t) => !(t.preview && (t.group ?? 'main') === group)) : tabs
+    set({ tabs: [...withoutPreview, { ...tab, group }] })
+    get().setActiveTab(tab.id)
+    if (tab.path) get().noteRecentFile(tab.path)
   },
 
   closeTab(id) {
-    const { tabs, activeTabId } = get()
+    const { tabs, groupActive } = get()
     const index = tabs.findIndex((t) => t.id === id)
     if (index === -1) return
     const closing = tabs[index]
+    const group = closing.group ?? 'main'
     const next = tabs.filter((t) => t.id !== id)
     // Tell the server only when no other tab still shows the file.
     if (closing.path && !next.some((t) => t.path === closing.path)) {
       lspDidClose(closing.path)
     }
-    let nextActive = activeTabId
-    if (activeTabId === id) {
-      nextActive = next[index]?.id ?? next[index - 1]?.id ?? next[next.length - 1]?.id ?? null
+
+    const nextGroupActive = { ...groupActive }
+    if (groupActive[group] === id) {
+      const siblings = next.filter((t) => (t.group ?? 'main') === group)
+      const position = tabs.filter((t) => (t.group ?? 'main') === group).findIndex((t) => t.id === id)
+      nextGroupActive[group] =
+        siblings[position]?.id ?? siblings[position - 1]?.id ?? siblings[siblings.length - 1]?.id ?? null
     }
-    set({ tabs: next, activeTabId: nextActive })
+
+    // An emptied split collapses rather than leaving a blank half.
+    const groups = get().groups.filter(
+      (g) => g === 'main' || next.some((t) => (t.group ?? 'main') === g),
+    )
+    const activeGroup = groups.includes(get().activeGroup) ? get().activeGroup : 'main'
+
+    set({
+      tabs: next,
+      groups,
+      activeGroup,
+      groupActive: nextGroupActive,
+      activeTabId: nextGroupActive[activeGroup] ?? null,
+    })
+  },
+
+  closeOtherTabs(id) {
+    const target = get().tabs.find((t) => t.id === id)
+    if (!target) return
+    const group = target.group ?? 'main'
+    for (const tab of get().tabs.slice()) {
+      if (tab.id === id || tab.pinned || (tab.group ?? 'main') !== group) continue
+      get().closeTab(tab.id)
+    }
+  },
+
+  closeTabsToRight(id) {
+    const target = get().tabs.find((t) => t.id === id)
+    if (!target) return
+    const group = target.group ?? 'main'
+    const siblings = get().tabs.filter((t) => (t.group ?? 'main') === group)
+    const index = siblings.findIndex((t) => t.id === id)
+    for (const tab of siblings.slice(index + 1)) {
+      if (!tab.pinned) get().closeTab(tab.id)
+    }
+  },
+
+  togglePinTab(id) {
+    set({ tabs: get().tabs.map((t) => (t.id === id ? { ...t, pinned: !t.pinned, preview: false } : t)) })
+  },
+
+  /** Reorders `id` to sit before `beforeId`, or last when that is null. */
+  moveTab(id, beforeId) {
+    const tabs = get().tabs.slice()
+    const from = tabs.findIndex((t) => t.id === id)
+    if (from === -1 || id === beforeId) return
+    const [moved] = tabs.splice(from, 1)
+    const to = beforeId ? tabs.findIndex((t) => t.id === beforeId) : tabs.length
+    tabs.splice(to === -1 ? tabs.length : to, 0, moved)
+    set({ tabs })
+  },
+
+  splitEditor() {
+    const { groups, activeTabId, tabs } = get()
+    if (groups.includes('right')) {
+      get().setActiveGroup('right')
+      return
+    }
+    const active = tabs.find((t) => t.id === activeTabId)
+    set({ groups: ['main', 'right'], activeGroup: 'right' })
+    // Show the current file on both sides, the way splitting an editor should.
+    if (active?.path) {
+      get().openTab({ ...active, id: `${active.id}::right`, group: 'right', preview: false })
+    }
+  },
+
+  closeSplit() {
+    for (const tab of get().tabs.filter((t) => t.group === 'right')) get().closeTab(tab.id)
+    set({ groups: ['main'], activeGroup: 'main', activeTabId: get().groupActive.main })
+  },
+
+  setActiveGroup(group) {
+    if (!get().groups.includes(group)) return
+    set({ activeGroup: group, activeTabId: get().groupActive[group] })
+  },
+
+  /** MRU list behind ⌘E, capped so it stays a list and not a log. */
+  noteRecentFile(path) {
+    const next = [path, ...get().recentFiles.filter((p) => p !== path)].slice(0, 60)
+    set({ recentFiles: next })
+  },
+
+  /**
+   * Toggles a bookmark. With no arguments it uses the caret, which is what the
+   * F11 binding does.
+   */
+  toggleBookmark(file, line) {
+    const target = file ?? get().tabs.find((t) => t.id === get().activeTabId)?.path
+    const targetLine = line ?? get().cursor.line
+    if (!target || !targetLine) return
+    const existing = get().bookmarks.find((b) => b.file === target && b.line === targetLine)
+    if (existing) {
+      set({ bookmarks: get().bookmarks.filter((b) => b !== existing) })
+      return
+    }
+    const content = get().buffers[target]?.content ?? ''
+    const preview = content.split('\n')[targetLine - 1]?.trim().slice(0, 120) ?? ''
+    set({ bookmarks: [...get().bookmarks, { file: target, line: targetLine, preview }] })
+  },
+
+  removeBookmark(file, line) {
+    set({ bookmarks: get().bookmarks.filter((b) => !(b.file === file && b.line === line)) })
+  },
+
+  moveTabToGroup(id, group) {
+    if (!get().groups.includes(group)) return
+    set({ tabs: get().tabs.map((t) => (t.id === id ? { ...t, group } : t)) })
+    get().setActiveTab(id)
   },
 
   setActiveTab(id) {
+    const tab = get().tabs.find((t) => t.id === id)
+    // A stale id would otherwise point a group at a tab that does not exist,
+    // leaving the editor area blank with no way back.
+    if (!tab) return
+    const group = tab.group ?? get().activeGroup
+    set({
+      groupActive: { ...get().groupActive, [group]: id },
+      activeGroup: group,
+    })
+    if (tab?.path) get().noteRecentFile(tab.path)
     set({
       activeTabId: id,
       tabs: get().tabs.map((t) => (t.id === id ? { ...t, preview: false } : t)),
@@ -1060,6 +1260,54 @@ export const useStore = create<State>((set, get) => ({
         [path]: { ...doc, status: 'done', finishedAt: Date.now() },
       },
     })
+  },
+
+  /**
+   * Records that `path` changed underneath a dirty buffer. The buffer is left
+   * exactly as the user typed it — this only makes the divergence visible, so a
+   * later save is a decision rather than an accident.
+   */
+  async noteExternalChange(path) {
+    const buffer = get().buffers[path]
+    if (!buffer) return
+    let diskContent = ''
+    try {
+      const result = await nova().fs.read(path)
+      if (result.binary) return
+      diskContent = result.content
+    } catch {
+      return
+    }
+    if (diskContent === buffer.content) return
+    set({
+      externalChanges: {
+        ...get().externalChanges,
+        [path]: { diskContent, noticedAt: Date.now() },
+      },
+    })
+  },
+
+  async resolveExternalChange(path, action) {
+    const entry = get().externalChanges[path]
+    const { [path]: _dropped, ...rest } = get().externalChanges
+    if (action === 'reload') {
+      await get().reloadBuffer(path)
+    } else if (action === 'compare' && entry) {
+      const buffer = get().buffers[path]
+      get().openTab({
+        id: `diff:external:${path}`,
+        kind: 'diff',
+        title: `${basename(path)} — on disk ↔ yours`,
+        subtitle: path,
+        diff: {
+          before: entry.diskContent,
+          after: buffer?.content ?? '',
+          language: languageForPath(path),
+          targetPath: path,
+        },
+      })
+    }
+    set({ externalChanges: rest })
   },
 
   patchExplain(runId, patch) {

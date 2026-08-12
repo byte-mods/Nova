@@ -289,11 +289,29 @@ export interface DebugVariable {
   variablesReference: number
 }
 
+/**
+ * One breakpoint. A bare line breakpoint is the common case; the optional
+ * fields map straight onto the DAP `SourceBreakpoint` shape.
+ */
+export interface DebugBreakpoint {
+  line: number
+  /** Only break when this expression is truthy. */
+  condition?: string
+  /** DAP hit condition, e.g. `>5` or `%3`. */
+  hitCondition?: string
+  /** A log point: print this instead of suspending. `{expr}` interpolates. */
+  logMessage?: string
+  /** Muted breakpoints stay in the gutter but are not sent to the adapter. */
+  enabled: boolean
+}
+
 export interface DebugBreakpointFile {
   file: string
   lines: number[]
   /** Lines the adapter confirmed it could bind. */
   verified: number[]
+  /** The full definition for each line in `lines`. */
+  items: DebugBreakpoint[]
 }
 
 export interface DebugState {

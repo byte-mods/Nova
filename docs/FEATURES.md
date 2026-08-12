@@ -6,6 +6,7 @@ UI, see [tests/FEATURES.md](../tests/FEATURES.md).
 
 - [Editor](#editor)
 - [Code navigation](#code-navigation)
+- [Search, replace and TODOs](#search-replace-and-todos)
 - [Autocomplete](#autocomplete)
 - [Refactoring](#refactoring)
 - [Explain this file](#explain-this-file)
@@ -33,9 +34,16 @@ Monaco — the engine behind VS Code — with grammars for every popular languag
 - Problems panel fed by Monaco diagnostics
 - Bracket-pair colouring, sticky scroll, minimap, indent guides
 - Multi-cursor, column selection, find/replace, folding, comment toggle — all of
-  Monaco's 140 editor actions are live
+  Monaco's 140 editor actions are live, and every one is reachable by name from
+  **Find Action** (`⇧⌘P`)
+- **Split editors** (`⌥⌘→`): two groups side by side, each with its own tab
+  strip and active tab. Drag a tab between them, or use the tab context menu.
+- Tabs can be **reordered by dragging**, **pinned** so Close Others spares them,
+  and closed in bulk — Close Others, Close to the Right — from a context menu
 
-Project-wide search supports match-case and regular expressions.
+A file changed on disk while its buffer has unsaved edits raises a banner
+offering **Reload from disk**, **Compare** or **Keep mine**, so a later save is a
+decision rather than an accident.
 
 ---
 
@@ -51,6 +59,10 @@ navigation with no language server involved.
 | `⇧F12` | Peek references inline |
 | `⇧⌘O` | **Go to Symbol in Project** — fuzzy search every class, function, method, constant and global, with kind badges and containers |
 | `⌃⌥H` / `⌃H` | Call hierarchy / type hierarchy (needs a language server) |
+| `⌘E` | **Recent Files** — the MRU list |
+| `⌘F12` | **File Structure** — this file's symbols, filterable |
+| `F11` / `⇧F11` | Toggle a **bookmark** / list them all |
+| `⇧⌘P` | **Find Action** — every app command *and* every editor action, with its keybinding |
 
 Declarations are parsed per language rather than through a language server, so
 navigation works with no extra tooling and covers TypeScript/JavaScript, Python,
@@ -235,9 +247,9 @@ cannot edit files it has no model for.
 [Settings › Language servers](INSTALLATION.md#optional-language-servers) for the
 list and an install command for each.
 
-**Known limitation:** server-side commands (`workspace/executeCommand`) are not
-implemented, so quick fixes that rely on one — some servers' "organize imports" —
-report that instead of running.
+Code actions that resolve to a server-side command run through
+`workspace/executeCommand`; the server does the work and pushes the result back
+as a `workspace/applyEdit`, which Nova applies like any other edit.
 
 ---
 
@@ -256,9 +268,18 @@ expandable values, watch expressions, and a debug console. `debugpy`, `dlv`,
 | `F11` / `⇧F11` | Step into / out |
 | gutter click | Toggle breakpoint (`⌥`-click on a test line) |
 
-**Known limitation:** breakpoints live in the main process for the app's lifetime
-and are not persisted across restarts. Conditional breakpoints and log points are
-not implemented.
+Breakpoints **persist per project** and come back when you reopen it. Right-click
+one in the gutter for its properties:
+
+| | |
+|---|---|
+| **Condition** | suspend only when an expression is true, evaluated in the frame's scope |
+| **Hit count** | `>5`, `%3`, `=10` — support varies by adapter |
+| **Log message** | turns it into a **log point**: prints and does *not* suspend. `{expr}` interpolates |
+| **Enabled** | mute it without losing the condition |
+
+Each kind is distinct in the gutter: a red dot for a plain breakpoint, amber for
+a conditional one, a blue diamond for a log point, and a hollow ring when muted.
 
 ---
 
@@ -372,9 +393,15 @@ persistence between commands, and `⌃C` to interrupt. Run configurations are
 detected from the project (npm scripts, `go run`, `cargo run`, `python`) and
 appear in the run picker in the title bar.
 
-**Known limitation:** the terminal is not a PTY. Each command runs as its own
-child process with pipes, so interactive programs (`vim`, `top`, `less`,
-`git rebase -i`, password prompts) do not work, and `stdout` is not a tty.
+The shell runs on a **real pseudo-terminal**, so it behaves like any other
+terminal: `vim`, `top`, `less`, `git rebase -i` and password prompts all work,
+`stdout` is a tty, the width follows the pane, and Ctrl+C interrupts the
+foreground job rather than the shell. History, line editing and `cd` are the
+shell's own.
+
+`node-pty` ships N-API prebuilds, so there is no rebuild step. If the native
+module is unavailable Nova falls back to running one child process per command
+and says so on open — that path cannot run interactive programs.
 
 ---
 

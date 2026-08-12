@@ -12,6 +12,7 @@ import Toast from '@/components/Toast'
 import RefactorPreview from '@/components/RefactorPreview'
 import RefactorDialog from '@/components/RefactorDialog'
 import RefactorMenu from '@/components/RefactorMenu'
+import BreakpointDialog from '@/components/BreakpointDialog'
 import Splitter from '@/components/Splitter'
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts'
 import { useWatchers } from '@/hooks/useWatchers'
@@ -90,6 +91,7 @@ export default function App() {
       </div>
       <StatusBar />
       <CommandPalette />
+      <BreakpointDialog />
       <RefactorMenu />
       <RefactorDialog />
       <RefactorPreview />

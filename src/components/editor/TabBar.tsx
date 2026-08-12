@@ -1,47 +1,124 @@
+import { useState } from 'react'
 import {
   BookOpen,
+  Columns2,
   GitCommitHorizontal,
   Globe,
   History,
   Loader2,
+  Pin,
   Settings,
   Shapes,
   SplitSquareHorizontal,
   X,
 } from 'lucide-react'
-import { useStore, type Tab } from '@/state/store'
+import { useStore, type GroupId, type Tab } from '@/state/store'
 import { fileIcon } from '@/lib/fileIcons'
 import { isImage } from '@/lib/language'
+import ContextMenu, { type MenuEntry } from '@/components/ContextMenu'
 
-export default function TabBar() {
+/**
+ * The tab strip for one editor group.
+ *
+ * Tabs can be reordered by dragging, pinned so Close Others spares them, moved
+ * into the other group, and closed in bulk from the context menu — the set of
+ * things you reach for once more than a handful of files are open.
+ */
+export default function TabBar({ group }: { group: GroupId }) {
   const tabs = useStore((s) => s.tabs)
-  const activeTabId = useStore((s) => s.activeTabId)
+  const activeTabId = useStore((s) => s.groupActive[group])
   const buffers = useStore((s) => s.buffers)
   const iconPack = useStore((s) => s.settings.iconPack)
+  const groups = useStore((s) => s.groups)
+  const [menu, setMenu] = useState<{ x: number; y: number; entries: MenuEntry[] } | null>(null)
+  const [dragging, setDragging] = useState<string | null>(null)
 
-  if (tabs.length === 0) return null
+  const mine = tabs.filter((t) => (t.group ?? 'main') === group)
+  // Pinned tabs sit at the front, the way every editor with pinning does it.
+  const ordered = [...mine.filter((t) => t.pinned), ...mine.filter((t) => !t.pinned)]
+  if (ordered.length === 0) return null
+
+  const contextItems = (tab: Tab): MenuEntry[] => {
+    const store = useStore.getState()
+    const other: GroupId = group === 'main' ? 'right' : 'main'
+    return [
+      { id: 'close', label: 'Close', onSelect: () => store.closeTab(tab.id) },
+      { id: 'close-others', label: 'Close Others', onSelect: () => store.closeOtherTabs(tab.id) },
+      { id: 'close-right', label: 'Close to the Right', onSelect: () => store.closeTabsToRight(tab.id) },
+      { id: 'sep1', separator: true },
+      { id: 'pin', label: tab.pinned ? 'Unpin' : 'Pin', onSelect: () => store.togglePinTab(tab.id) },
+      groups.includes(other)
+        ? {
+            id: 'move-group',
+            label: `Move to ${other === 'right' ? 'Right' : 'Left'} Group`,
+            onSelect: () => store.moveTabToGroup(tab.id, other),
+          }
+        : { id: 'split', label: 'Split Right', onSelect: () => store.splitEditor() },
+      ...(tab.path
+        ? [
+            { id: 'sep2', separator: true },
+            { id: 'copy-path', label: 'Copy Path', onSelect: () => void navigator.clipboard.writeText(tab.path!) },
+            { id: 'reveal', label: 'Reveal in Finder', onSelect: () => void window.nova.app.revealInFinder(tab.path!) },
+          ]
+        : []),
+    ]
+  }
 
   return (
-    <div className="tabbar">
-      {tabs.map((tab) => {
+    <div
+      className={`tabbar ${useStore.getState().activeGroup === group ? 'focused' : ''}`}
+      onMouseDown={() => useStore.getState().setActiveGroup(group)}
+      onDragOver={(e) => e.preventDefault()}
+      onDrop={(e) => {
+        e.preventDefault()
+        const id = e.dataTransfer.getData('text/nova-tab')
+        if (id) useStore.getState().moveTabToGroup(id, group)
+      }}
+    >
+      {ordered.map((tab) => {
         const dirty = tab.path
           ? buffers[tab.path] && buffers[tab.path].content !== buffers[tab.path].savedContent
           : false
         return (
           <div
             key={tab.id}
-            className={`tab ${tab.id === activeTabId ? 'active' : ''} ${dirty ? 'dirty' : ''}`}
+            draggable
+            className={`tab ${tab.id === activeTabId ? 'active' : ''} ${dirty ? 'dirty' : ''} ${
+              dragging === tab.id ? 'dragging' : ''
+            }`}
             style={tab.preview ? { fontStyle: 'italic' } : undefined}
+            onDragStart={(e) => {
+              e.dataTransfer.setData('text/nova-tab', tab.id)
+              e.dataTransfer.effectAllowed = 'move'
+              setDragging(tab.id)
+            }}
+            onDragEnd={() => setDragging(null)}
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              const id = e.dataTransfer.getData('text/nova-tab')
+              if (!id || id === tab.id) return
+              const store = useStore.getState()
+              const dragged = store.tabs.find((t) => t.id === id)
+              if (dragged && (dragged.group ?? 'main') !== group) store.moveTabToGroup(id, group)
+              store.moveTab(id, tab.id)
+            }}
+            onContextMenu={(e) => {
+              e.preventDefault()
+              setMenu({ x: e.clientX, y: e.clientY, entries: contextItems(tab) })
+            }}
             onMouseDown={(e) => {
               if (e.button === 1) {
                 e.preventDefault()
                 useStore.getState().closeTab(tab.id)
-              } else {
+              } else if (e.button === 0) {
                 useStore.getState().setActiveTab(tab.id)
               }
             }}
             title={tab.subtitle ?? tab.path ?? tab.title}
           >
+            {tab.pinned && <Pin size={10} className="tab-pin" />}
             <TabIcon tab={tab} iconPack={iconPack} />
             <span className="tab-name">{tab.title}</span>
             <button
@@ -57,8 +134,30 @@ export default function TabBar() {
           </div>
         )
       })}
-      <ExplainButton />
+
+      <SplitButton group={group} />
+      <ExplainButton group={group} />
+
+      {menu && (
+        <ContextMenu x={menu.x} y={menu.y} entries={menu.entries} onClose={() => setMenu(null)} />
+      )}
     </div>
+  )
+}
+
+function SplitButton({ group }: { group: GroupId }) {
+  const groups = useStore((s) => s.groups)
+  const split = groups.length > 1
+  if (group !== 'main' && !split) return null
+  return (
+    <button
+      className="tab-action tab-action-split"
+      style={{ marginLeft: 'auto', marginRight: 0 }}
+      title={split ? 'Close the split' : 'Split editor right (⌥⌘→)'}
+      onClick={() => (split ? useStore.getState().closeSplit() : useStore.getState().splitEditor())}
+    >
+      {split ? <Columns2 size={12} /> : <SplitSquareHorizontal size={12} />}
+    </button>
   )
 }
 
@@ -69,9 +168,9 @@ export default function TabBar() {
  * that it is visible above every kind of file without adding a row of chrome
  * that most files do not need.
  */
-function ExplainButton() {
+function ExplainButton({ group }: { group: GroupId }) {
   const tabs = useStore((s) => s.tabs)
-  const activeTabId = useStore((s) => s.activeTabId)
+  const activeTabId = useStore((s) => s.groupActive[group])
   const explain = useStore((s) => s.explain)
 
   const active = tabs.find((t) => t.id === activeTabId)
@@ -86,7 +185,8 @@ function ExplainButton() {
 
   return (
     <button
-      className={`tab-action ${running ? 'busy' : ''}`}
+      className={`tab-action tab-action-explain ${running ? 'busy' : ''}`}
+      style={{ marginLeft: 0 }}
       disabled={!target}
       title={
         target
@@ -123,6 +223,7 @@ function TabIcon({ tab, iconPack }: { tab: Tab; iconPack: 'nova' | 'classic' | '
   if (tab.kind === 'diff') return <SplitSquareHorizontal size={13} style={{ color: 'var(--warning)' }} />
   if (tab.kind === 'commit') return <GitCommitHorizontal size={13} style={{ color: 'var(--accent)' }} />
   if (tab.kind === 'history') return <History size={13} style={{ color: 'var(--accent)' }} />
+  if (tab.kind === 'explain') return <BookOpen size={13} style={{ color: 'var(--accent)' }} />
   if (tab.kind === 'settings') return <Settings size={13} className="faint" />
   const { Icon, color } = fileIcon(tab.path ?? tab.title, iconPack)
   return <Icon size={13} style={{ color, flexShrink: 0 }} />

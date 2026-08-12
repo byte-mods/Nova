@@ -24,6 +24,15 @@ Nova is an Electron app built with Vite. There is no installer step beyond
 | **git** | required for the Git panel; the rest of the IDE works without it |
 | **Disk** | ~600 MB for `node_modules`, most of it the Electron binary |
 
+`node-pty` provides the terminal's pseudo-terminal. It ships N-API prebuilds, so
+there is no compiler step — but npm 10.9+ gates its install script, which is what
+marks the helper binary executable. Nova repairs that at load time, so the
+terminal works either way; approving the script simply avoids the repair:
+
+```bash
+npm install-scripts approve node-pty
+```
+
 Everything else — language servers, debug adapters, the `claude` and `codex`
 CLIs — is optional. Nova probes your `PATH` on start and shows what it found in
 **Settings**, with an install command for each thing it did not find.
@@ -219,6 +228,6 @@ that section needs `claude` or `codex` installed.
 **Linux** — builds and runs. The terminal uses your `$SHELL`. Install
 `libnss3`, `libatk-bridge2.0-0` and `libgtk-3-0` if Electron refuses to start.
 
-**Windows** — the code paths are POSIX-flavoured in places (path separators in the
-refactoring engine's import rewriting, the shell invocation in
-`electron/ipc/shell.ts`). Expect rough edges; WSL is the smoother route today.
+**Windows** — the terminal uses ConPTY through `node-pty` and `COMSPEC`. Other
+code paths are POSIX-flavoured in places (path separators in the refactoring
+engine's import rewriting). Expect rough edges; WSL is the smoother route today.

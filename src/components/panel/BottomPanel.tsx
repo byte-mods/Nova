@@ -4,6 +4,7 @@ import {
   ChevronsDown,
   Bug,
   FlaskConical,
+  ListTodo,
   Network,
   Plus,
   Target,
@@ -13,6 +14,7 @@ import {
 } from 'lucide-react'
 import { useStore } from '@/state/store'
 import TerminalView from './TerminalView'
+import TodoView from './TodoView'
 import ProblemsView from './ProblemsView'
 import UsagesView from './UsagesView'
 import HierarchyView from './HierarchyView'
@@ -82,6 +84,12 @@ export default function BottomPanel() {
           >
             <AlertTriangle size={12} /> Problems
           </button>
+          <button
+            className={`pane-tab ${panelTab === 'todo' ? 'active' : ''}`}
+            onClick={() => useStore.getState().togglePanel('todo')}
+          >
+            <ListTodo size={12} /> TODO
+          </button>
         </div>
 
         {panelTab === 'terminal' && (
@@ -99,6 +107,7 @@ export default function BottomPanel() {
                       size={10}
                       onClick={(e) => {
                         e.stopPropagation()
+                        void window.nova.shell.dispose(id)
                         const next = terminals.filter((t) => t !== id)
                         setTerminals(next)
                         if (activeTerminal === id) setActiveTerminal(next[0])
@@ -158,6 +167,7 @@ export default function BottomPanel() {
         {panelTab === 'tests' && <TestsView />}
         {panelTab === 'debug' && <DebugView />}
         {panelTab === 'problems' && <ProblemsView />}
+        {panelTab === 'todo' && <TodoView />}
       </div>
     </div>
   )

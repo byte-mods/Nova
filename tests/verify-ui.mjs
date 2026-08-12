@@ -1449,16 +1449,49 @@ async function section14() {
   console.log('\n── 14. Terminal & run ──')
   await reset()
 
-  await r.guard('14.1', 'terminal opens and shows a prompt', async () => {
+  await r.guard('14.1', 'terminal opens on a real pseudo-terminal', async () => {
     await openPanelTab('Terminal')
+    const caps = await cdp.evaluate(`return await window.nova.shell.capabilities()`)
     const ready = await cdp
       .waitFor(
-        `(() => { const t=document.querySelector('.terminal-host'); return t && /Nova terminal|ui-demo/.test(t.textContent) ? 'yes' : null })()`,
-        { timeout: 20000, interval: 600, label: 'terminal prompt' },
+        `(() => { const t=document.querySelector('.terminal-host'); return t && t.textContent.trim().length > 0 ? 'yes' : null })()`,
+        { timeout: 20000, interval: 600, label: 'shell prompt' },
       )
       .catch(() => null)
+    return { ok: Boolean(ready) && caps.pty === true, detail: `pty=${caps.pty} shell=${caps.shell} ${caps.reason}` }
+  })
+
+  // The whole point of a pty: stdout is a tty, so programs behave normally.
+  await r.guard('14.1b', 'the shell sees a tty of the right width', async () => {
+    await cdp.click('.terminal-host', { settle: 600 })
+    await cdp.type('test -t 1 && echo IS_TTY || echo NOT_TTY; tput cols')
+    await cdp.key('Enter')
+    await cdp.sleep(2500)
     const t = (await text('.terminal-host')) ?? ''
-    return { ok: Boolean(ready), detail: t.slice(-70) }
+    const cols = /IS_TTY\s*(\d+)/.exec(t)
+    return {
+      ok: t.includes('IS_TTY') && Boolean(cols) && Number(cols[1]) > 20,
+      detail: `cols=${cols?.[1]} ${t.slice(-60)}`,
+    }
+  })
+
+  // A full-screen program is the case the old pipe-based shell could not run.
+  await r.guard('14.1c', 'a full-screen program runs and exits', async () => {
+    await cdp.type('seq 1 200 | less')
+    await cdp.key('Enter')
+    await cdp.sleep(2500)
+    const paging = await cdp.evaluate(`
+      const rows=[...document.querySelectorAll('.xterm-rows > div')].map(r=>r.textContent.replace(/\u00a0/g,' ').trimEnd()).filter(Boolean)
+      return { first: rows[0] ?? '', last: rows[rows.length-1] ?? '' }`)
+    await cdp.type('q')
+    await cdp.sleep(1500)
+    const after = await cdp.evaluate(`
+      const rows=[...document.querySelectorAll('.xterm-rows > div')].map(r=>r.textContent.replace(/\u00a0/g,' ').trimEnd()).filter(Boolean)
+      return rows[rows.length-1] ?? ''`)
+    return {
+      ok: paging.first.trim() === '1' && !after.includes(':'),
+      detail: `first=${paging.first.trim()} last=${paging.last.trim()} after=${after.slice(-40)}`,
+    }
   })
 
   await r.guard('14.2', 'a command runs and prints output', async () => {
@@ -1903,8 +1936,12 @@ async function section17() {
 async function section18() {
   console.log('\n── 18. Explain ──')
   await reset()
-  const target = path.join(PROJECT, 'src', 'main.py')
-  const saved = path.join(PROJECT, 'src', 'main-py.explained.md')
+  // Tab ids are built from the canonical path the store resolves on open.
+  const REAL = await cdp.evaluate(
+    `return await window.nova.fs.realpath(${JSON.stringify(PROJECT)})`,
+  )
+  const target = path.join(REAL, 'src', 'main.py')
+  const saved = path.join(REAL, 'src', 'main-py.explained.md')
   await fs.rm(saved, { force: true })
   // Section 13 leaves a conversation behind, so the assertion is that Explain
   // adds nothing to it — not that it is empty.
@@ -1921,7 +1958,7 @@ async function section18() {
 
   await r.guard('18.1', 'Explain button is offered for a source file', async () => {
     const button = await cdp.evaluate(`
-      const b = document.querySelector('.tab-action')
+      const b = document.querySelector('.tab-action-explain')
       return b ? { text: b.textContent.trim(), disabled: b.disabled } : null`)
     return { ok: Boolean(button) && button.text === 'Explain' && !button.disabled, detail: JSON.stringify(button) }
   })
@@ -1931,7 +1968,7 @@ async function section18() {
       const s=(await import('/src/state/store.ts')).useStore
       s.getState().openTab({ id: 'settings', kind: 'settings', title: 'Settings' }); return true`)
     await cdp.sleep(500)
-    const disabled = await cdp.evaluate(`return document.querySelector('.tab-action')?.disabled === true`)
+    const disabled = await cdp.evaluate(`return document.querySelector('.tab-action-explain')?.disabled === true`)
     await cdp.evaluate(`
       const s=(await import('/src/state/store.ts')).useStore
       s.getState().setActiveTab('file:' + ${JSON.stringify(target)}); return true`)
@@ -1940,7 +1977,7 @@ async function section18() {
   })
 
   await r.guard('18.3', 'clicking it opens a walkthrough tab and starts a run', async () => {
-    const clicked = await cdp.click('.tab-action', { settle: 1500 })
+    const clicked = await cdp.click('.tab-action-explain', { settle: 1500 })
     const state = await cdp.evaluate(`
       const s=(await import('/src/state/store.ts')).useStore.getState()
       return {
@@ -2021,9 +2058,278 @@ async function section18() {
   })
 }
 
+/* ================================================================== */
+/* 19. IDE parity — Find Action, navigation, tabs, TODO, replace       */
+/* ================================================================== */
+async function section19() {
+  console.log('\n── 19. IDE parity ──')
+  await reset()
+  // The store canonicalises paths on open (macOS resolves /var to /private/var),
+  // so assertions that compare against store keys must use the same form.
+  const REAL = await cdp.evaluate(
+    `return await window.nova.fs.realpath(${JSON.stringify(PROJECT)})`,
+  )
+  await cdp.evaluate(`
+    const s=(await import('/src/state/store.ts')).useStore
+    s.setState({ bookmarks: [], recentFiles: [] })
+    await s.getState().openFile(s.getState().root + '/src/orders.py')
+    await s.getState().openFile(s.getState().root + '/src/main.py')
+    return true`)
+  await cdp.sleep(1500)
+
+  await r.guard('19.1', 'Find Action lists every editor action, not a shortlist', async () => {
+    await cdp.key('p', ['meta', 'shift'])
+    await cdp.sleep(700)
+    const total = await count('.modal-item')
+    // A curated list was ~26; the editor alone contributes well over a hundred.
+    const found = {}
+    for (const q of ['fold all', 'uppercase', 'add cursor below']) {
+      await cdp.evaluate(`
+        const i=document.querySelector('.modal-input')
+        const set=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set
+        set.call(i,''); i.dispatchEvent(new Event('input',{bubbles:true})); return true`)
+      await cdp.type(q, 0)
+      await cdp.sleep(250)
+      found[q] = await cdp.evaluate(
+        `return document.querySelector('.modal-item')?.innerText.replace(/\\n/g,' ') ?? ''`,
+      )
+    }
+    await cdp.key('Escape')
+    const all = Object.values(found).join(' | ').toLowerCase()
+    return {
+      ok: total > 120 && all.includes('fold all') && all.includes('uppercase') && all.includes('cursor below'),
+      detail: `entries=${total} ${JSON.stringify(found)}`,
+    }
+  })
+
+  await r.guard('19.2', 'Recent Files (⌘E) lists what was opened', async () => {
+    await cdp.key('e', ['meta'])
+    await cdp.sleep(600)
+    const items = await cdp.evaluate(
+      `return [...document.querySelectorAll('.modal-item')].map(e=>e.innerText.split('\\n')[0])`,
+    )
+    await cdp.key('Escape')
+    return { ok: items.includes('main.py') && items.includes('orders.py'), detail: JSON.stringify(items) }
+  })
+
+  await r.guard('19.3', 'File Structure (⌘F12) lists this file’s symbols', async () => {
+    await cdp.evaluate(`
+      const s=(await import('/src/state/store.ts')).useStore
+      await s.getState().openFile(s.getState().root + '/src/orders.py'); return true`)
+    await cdp.sleep(900)
+    await cdp.key('F12', ['meta'])
+    await cdp.sleep(900)
+    const items = await cdp.evaluate(
+      `return [...document.querySelectorAll('.modal-item')].map(e=>e.innerText.replace(/\\n/g,' '))`,
+    )
+    await cdp.key('Escape')
+    const text = items.join(' ')
+    return { ok: text.includes('OrderService') && items.length >= 2, detail: JSON.stringify(items.slice(0, 4)) }
+  })
+
+  await r.guard('19.4', 'F11 bookmarks a line and ⇧F11 lists them', async () => {
+    await cdp.evaluate(`
+      const s=(await import('/src/state/store.ts')).useStore
+      s.setState({ cursor: { line: 2, column: 1 } }); return true`)
+    await cdp.key('F11')
+    await cdp.sleep(400)
+    const marks = await cdp.evaluate(
+      `return (await import('/src/state/store.ts')).useStore.getState().bookmarks.length`,
+    )
+    await cdp.key('F11', ['shift'])
+    await cdp.sleep(600)
+    const listed = await count('.modal-item')
+    await cdp.key('Escape')
+    return { ok: marks === 1 && listed === 1, detail: `marks=${marks} listed=${listed}` }
+  })
+
+  await r.guard('19.5', 'the editor splits into two groups and collapses again', async () => {
+    await cdp.evaluate(`
+      const s=(await import('/src/state/store.ts')).useStore
+      await s.getState().openFile(s.getState().root + '/src/orders.py')
+      s.getState().splitEditor()
+      return true`)
+    await cdp
+      .waitFor(`document.querySelectorAll('.tabbar').length === 2 ? 'yes' : null`, {
+        timeout: 12000,
+        interval: 400,
+        label: 'second tab strip',
+      })
+      .catch(() => null)
+    const split = await cdp.evaluate(`return {
+      groups: (await import('/src/state/store.ts')).useStore.getState().groups.length,
+      bars: document.querySelectorAll('.tabbar').length,
+      panes: document.querySelectorAll('.editor-group').length,
+    }`)
+    await cdp.evaluate(`(await import('/src/state/store.ts')).useStore.getState().closeSplit(); return true`)
+    await cdp.sleep(700)
+    const collapsed = await cdp.evaluate(
+      `return (await import('/src/state/store.ts')).useStore.getState().groups.length`,
+    )
+    return {
+      ok: split.groups === 2 && split.bars === 2 && split.panes === 2 && collapsed === 1,
+      detail: `${JSON.stringify(split)} collapsed=${collapsed}`,
+    }
+  })
+
+  await r.guard('19.6', 'tabs have a context menu and can be dragged', async () => {
+    await cdp.evaluate(`
+      const s=(await import('/src/state/store.ts')).useStore
+      await s.getState().openFile(s.getState().root + '/src/orders.py'); return true`)
+    await cdp.sleep(1200)
+    const draggable = await cdp.evaluate(`return document.querySelector('.tab')?.draggable === true`)
+    await cdp.evaluate(`
+      document.querySelector('.tab').dispatchEvent(
+        new MouseEvent('contextmenu', { bubbles: true, clientX: 200, clientY: 120 }))
+      return true`)
+    await cdp.sleep(500)
+    const entries = await cdp.evaluate(
+      `return [...document.querySelectorAll('.context-item')].map(e=>e.textContent)`,
+    )
+    await cdp.key('Escape')
+    return {
+      ok:
+        draggable &&
+        entries.includes('Close Others') &&
+        entries.includes('Close to the Right') &&
+        entries.includes('Pin'),
+      detail: `draggable=${draggable} ${JSON.stringify(entries)}`,
+    }
+  })
+
+  await r.guard('19.7', 'the TODO panel finds tagged comments', async () => {
+    const probe = path.join(PROJECT, 'src', 'todo_probe.py')
+    await fs.writeFile(probe, '# TODO: wire up the repository\n# FIXME: this leaks\nx = 1\n')
+    await cdp.sleep(1200)
+    await cdp.evaluate(`(await import('/src/state/store.ts')).useStore.getState().showPanel('todo'); return true`)
+    await cdp.sleep(3500)
+    const text = await cdp.evaluate(`return document.querySelector('.pane-body')?.innerText ?? ''`)
+    await fs.rm(probe, { force: true })
+    return {
+      ok: text.includes('wire up the repository') && text.includes('this leaks') && /TODO\s*1/.test(text),
+      detail: text.slice(0, 120).replace(/\n/g, ' | '),
+    }
+  })
+
+  await r.guard('19.8', 'Replace in Project previews and rewrites every match', async () => {
+    const a = path.join(PROJECT, 'src', 'rep_a.py')
+    const b = path.join(PROJECT, 'src', 'rep_b.py')
+    await fs.writeFile(a, 'widget = 1\nprint(widget, widget)\n')
+    await fs.writeFile(b, '# a widget here\nwidget_count = 2\n')
+    await cdp.sleep(1500)
+
+    await cdp.evaluate(`
+      const s=(await import('/src/state/store.ts')).useStore
+      s.setState({ sidebarVisible: true, sidebarView: 'search' }); return true`)
+    await cdp.sleep(600)
+    await cdp.evaluate(`window.dispatchEvent(new CustomEvent('nova:open-replace')); return true`)
+    await cdp.sleep(400)
+    await cdp.click('.sidebar input', { settle: 400 })
+    await cdp.type('widget')
+    await cdp.sleep(1800)
+
+    const replaceBox = await cdp.boxOf('.sidebar input', 1)
+    if (!replaceBox) return { ok: false, detail: 'no replace field' }
+    await cdp.clickPoint(replaceBox)
+    await cdp.type('gadget')
+    await cdp.sleep(300)
+    const clicked = await cdp.clickText('.sidebar .btn', 'Replace', { settle: 2000 })
+    await cdp.sleep(1200)
+    const summary = await cdp.evaluate(
+      `return document.querySelector('.refactor-modal .refactor-head .faint')?.textContent ?? ''`,
+    )
+    await cdp.clickText('.refactor-modal .btn.primary', 'Apply', { settle: 2500 })
+    await cdp.sleep(1500)
+
+    const afterA = await fs.readFile(a, 'utf8').catch(() => '')
+    const afterB = await fs.readFile(b, 'utf8').catch(() => '')
+    await fs.rm(a, { force: true })
+    await fs.rm(b, { force: true })
+    return {
+      ok:
+        clicked &&
+        /5 edits across 2 files/.test(summary) &&
+        afterA === 'gadget = 1\nprint(gadget, gadget)\n' &&
+        afterB === '# a gadget here\ngadget_count = 2\n',
+      detail: `${summary} | ${afterA.replace(/\n/g, '\\n')}`,
+    }
+  })
+
+  await r.guard('19.9', 'a disk change under a dirty buffer is surfaced', async () => {
+    const target = path.join(PROJECT, 'src', 'util.go')
+    const original = await fs.readFile(target, 'utf8')
+    const literal = JSON.stringify(path.join(REAL, 'src', 'util.go'))
+    await cdp.evaluate(
+      `const s=(await import('/src/state/store.ts')).useStore; await s.getState().openFile(${literal}); return true`,
+    )
+    await cdp.sleep(1000)
+    await cdp.evaluate(
+      `const s=(await import('/src/state/store.ts')).useStore; const p=${literal};` +
+        ` s.getState().updateBuffer(p, '// unsaved edit' + String.fromCharCode(10) + s.getState().buffers[p].content); return true`,
+    )
+    await cdp.sleep(400)
+    await fs.writeFile(target, `${original}\n// written by another process\n`)
+    const shown = await cdp
+      .waitFor(`document.querySelector('.external-change') ? 'yes' : null`, {
+        timeout: 12000,
+        interval: 500,
+        label: 'external change bar',
+      })
+      .then(() => true)
+      .catch(() => false)
+    const actions = await cdp.evaluate(
+      `return [...document.querySelectorAll('.external-change .btn')].map(b=>b.textContent.trim())`,
+    )
+    const why = await cdp.evaluate(
+      `const s=(await import('/src/state/store.ts')).useStore.getState();` +
+        ` const p=${literal}; const b=s.buffers[p];` +
+        ` return { tracked: Object.keys(s.externalChanges), dirty: b ? b.content !== b.savedContent : null,` +
+        ` active: s.tabs.find(t=>t.id===s.activeTabId)?.path, hasBuffer: Boolean(b) }`,
+    )
+    await cdp.evaluate(
+      `const s=(await import('/src/state/store.ts')).useStore; await s.getState().resolveExternalChange(${literal}, 'keep'); return true`,
+    )
+    await fs.writeFile(target, original)
+    return {
+      ok: shown && actions.some((a) => a.includes('Reload')) && actions.some((a) => a.includes('Compare')),
+      detail: `shown=${shown} ${JSON.stringify(actions)} ${JSON.stringify(why)}`,
+    }
+  })
+
+  await r.guard('19.10', 'breakpoints carry conditions and log messages', async () => {
+    const target = path.join(REAL, 'src', 'main.py')
+    await cdp.evaluate(`await window.nova.debug.clearBreakpoints(); return true`)
+    await cdp.evaluate(`
+      await window.nova.debug.updateBreakpoint(${JSON.stringify(target)}, 6, { condition: 'total > 1', enabled: true })
+      await window.nova.debug.updateBreakpoint(${JSON.stringify(target)}, 7, { logMessage: 'here {total}', enabled: true })
+      await window.nova.debug.updateBreakpoint(${JSON.stringify(target)}, 8, { enabled: false })
+      return true`)
+    await cdp.evaluate(`
+      const s=(await import('/src/state/store.ts')).useStore
+      await s.getState().openFile(${JSON.stringify(target)}); return true`)
+    await cdp.sleep(1500)
+    const classes = await cdp.evaluate(
+      `return [...document.querySelectorAll('.nova-breakpoint')].map(e=>e.className).join(' ')`,
+    )
+    const items = await cdp.evaluate(`
+      const s=(await import('/src/state/store.ts')).useStore.getState()
+      return s.debug.state?.breakpoints?.[0]?.items ?? []`)
+    const glyphs = await count('.nova-breakpoint')
+    await cdp.evaluate(`await window.nova.debug.clearBreakpoints(); return true`)
+    return {
+      ok:
+        classes.includes('conditional') &&
+        classes.includes('log') &&
+        classes.includes('disabled') &&
+        items.length === 3,
+      detail: `glyphs=${glyphs} items=${items.length} classes=${classes}`,
+    }
+  })
+}
+
 /* ------------------------------------------------------------------ */
 
-const SECTIONS = { 1: section1, 2: section2, 3: section3, 4: section4, 5: section5, 6: section6, 7: section7, 8: section8, 9: section9, 10: section10, 11: section11, 12: section12, 13: section13, 14: section14, 15: section15, 16: section16, 17: section17, 18: section18 }
+const SECTIONS = { 1: section1, 2: section2, 3: section3, 4: section4, 5: section5, 6: section6, 7: section7, 8: section8, 9: section9, 10: section10, 11: section11, 12: section12, 13: section13, 14: section14, 15: section15, 16: section16, 17: section17, 18: section18, 19: section19 }
 
 await buildFixture()
 await openProject()

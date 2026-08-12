@@ -124,6 +124,11 @@ export function currentHasSelection(): boolean {
   return active ? hasSelection(active.editor) : false
 }
 
+/** The last focused code editor, for anything that needs its actions. */
+export function activeEditor(): monacoNs.editor.ICodeEditor | null {
+  return active?.editor ?? null
+}
+
 /* ---------------- dialog plumbing ---------------- */
 
 export type FieldKind = 'text' | 'checkbox' | 'select' | 'params' | 'members' | 'info'

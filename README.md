@@ -8,7 +8,7 @@
 [![Electron](https://img.shields.io/badge/Electron-43-47848F?logo=electron&logoColor=white)](https://www.electronjs.org/)
 [![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)](https://react.dev/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.5-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-[![Tests](https://img.shields.io/badge/tests-117%20UI%20%2B%20120%20offline-brightgreen.svg)](tests/FEATURES.md)
+[![Tests](https://img.shields.io/badge/tests-129%20UI%20%2B%20120%20offline-brightgreen.svg)](tests/FEATURES.md)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%C2%B7%20Linux%20%C2%B7%20Windows-lightgrey.svg)](docs/INSTALLATION.md)
 
 <img src="docs/screenshot.png" alt="Nova IDE — editor, project tree, symbol index and the Explain button" width="100%">
@@ -131,17 +131,34 @@ Diagrams render live as they arrive, in the active theme. The run is isolated
 from the AI console and uses plan-mode permissions, so a walkthrough can never
 edit the thing it describes. Copy it, or save it into the project as Markdown.
 
+### A terminal that is actually a terminal
+
+The shell runs on a real pseudo-terminal, so `vim`, `top`, `less`,
+`git rebase -i` and password prompts all work, the width follows the pane, and
+Ctrl+C interrupts the foreground job rather than the shell.
+
 ### Debugging, tests and language servers
 
 - **Debug Adapter Protocol** — breakpoints, step over/into/out, call stack,
   scoped variables, watch expressions, debug console. `debugpy`, `dlv`,
-  `lldb-dap` and `codelldb` are pre-configured.
+  `lldb-dap` and `codelldb` are pre-configured. Breakpoints **persist per
+  project** and support **conditions, hit counts and log points**.
 - **Tests** — frameworks detected from the project (go, cargo, pytest, vitest,
   jest, rspec, PHPUnit, Gradle, Maven, npm). Results appear as a grouped tree
   with pass/fail counts and durations; a green ▶ in the gutter runs one test.
 - **LSP** — 24 servers pre-configured. When one is present, navigation becomes
   type-aware and you gain rename, quick fixes, formatting, inlay hints,
   signature help, and call/type hierarchy.
+
+### The rest of the IDE
+
+- **Find Action** (`⇧⌘P`) — every app command *and* every editor action by name,
+  with its keybinding. **Recent Files** (`⌘E`), **File Structure** (`⌘F12`),
+  **Bookmarks** (`F11`).
+- **Split editors** (`⌥⌘→`), draggable and pinnable tabs, Close Others.
+- **Replace in Path** (`⇧⌘R`) with a preview, file masks, and a **TODO** panel.
+- A banner when a file changes on disk under unsaved edits — Reload, Compare or
+  Keep mine.
 
 ### Git, browser, diagrams and the AI console
 
@@ -171,7 +188,8 @@ edit the thing it describes. Copy it, or save it into the project as Markdown.
 | `⌥⌘E` Explain this file | `⌃⌥H` Call hierarchy | `⌃H` Type hierarchy | `⇧⌘G` Source control |
 | `F5` Debug start | `F10` Step over | `F11` Step into | `⇧F5` Stop |
 | `⌘S` · `⇧⌘S` Save · save all | `⌘B` Toggle sidebar | `⌘J` Toggle panel | `⌘I` Toggle AI console |
-| `` ⌃` `` Terminal | `⌘1…9` Jump to tab | `⌘W` Close tab | |
+| `` ⌃` `` Terminal | `⌘1…9` Jump to tab | `⌘W` Close tab | `⌥⌘→` Split editor |
+| `⌘E` Recent files | `⌘F12` File structure | `F11` Toggle bookmark | `⇧⌘R` Replace in path |
 
 Refactoring bindings are listed in the [features table](#thirteen-refactorings-on-intellijs-keymap)
 above. In the diagram canvas: drag to pan, `⌘`+scroll to zoom, `⌥` to bypass grid
@@ -220,7 +238,7 @@ npm test
 |---|---|
 | `npm run test:offline` | pure logic — declaration parsing, the symbol index, the edit applier, test-framework detection, the **76-check refactoring suite** and the Explain prompt contract |
 | `npm run test:tools` | real tooling — clangd + rust-analyzer over LSP, debugpy over DAP, inlay hints, call hierarchy |
-| `npm run test:ui` | **117 UI checks** driving the running app with real clicks and keystrokes over CDP — see [tests/FEATURES.md](tests/FEATURES.md) |
+| `npm run test:ui` | **129 UI checks** driving the running app with real clicks and keystrokes over CDP — see [tests/FEATURES.md](tests/FEATURES.md) |
 
 The UI suite asserts on rendered DOM after real input, not on store calls. It
 needs the app running with a debug port:

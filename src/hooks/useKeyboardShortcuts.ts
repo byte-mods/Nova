@@ -41,10 +41,52 @@ export function useKeyboardShortcuts() {
         void window.nova.debug.next()
         return
       }
-      if (e.key === 'F11') {
+      if (e.key === 'F11' && store.debug.state?.status === 'paused') {
         e.preventDefault()
         if (e.shiftKey) void window.nova.debug.stepOut()
         else void window.nova.debug.stepIn()
+        return
+      }
+      // Recent Files (⌘E) and Recent Locations (⇧⌘E).
+      if (mod && !e.altKey && e.key.toLowerCase() === 'e') {
+        e.preventDefault()
+        store.setPalette(true, 'recent')
+        return
+      }
+      // File Structure (⌘F12).
+      if (mod && e.key === 'F12') {
+        e.preventDefault()
+        store.setPalette(true, 'structure')
+        return
+      }
+      // Bookmarks: F11 toggles, ⇧F11 lists. Debug step-into keeps ⇧F11 only
+      // while a session is live, which is when it can mean anything.
+      if (e.key === 'F11' && !e.shiftKey && store.debug.state?.status !== 'paused') {
+        e.preventDefault()
+        store.toggleBookmark()
+        return
+      }
+      if (e.key === 'F11' && e.shiftKey && store.debug.state?.status !== 'paused') {
+        e.preventDefault()
+        store.setPalette(true, 'bookmarks')
+        return
+      }
+      // Replace in Path (⇧⌘R).
+      if (mod && e.shiftKey && e.key.toLowerCase() === 'r') {
+        e.preventDefault()
+        store.setSidebarView('search')
+        window.dispatchEvent(new CustomEvent('nova:open-replace'))
+        return
+      }
+      // Split editor (⌥⌘→) and close split (⌥⌘←).
+      if (mod && e.altKey && e.key === 'ArrowRight') {
+        e.preventDefault()
+        store.splitEditor()
+        return
+      }
+      if (mod && e.altKey && e.key === 'ArrowLeft') {
+        e.preventDefault()
+        store.closeSplit()
         return
       }
       // Explain This File.

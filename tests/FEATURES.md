@@ -5,7 +5,7 @@ by `tests/verify-ui.mjs`, which drives the running app through **real UI
 interaction** (clicking elements, typing, keyboard shortcuts) and asserts on the
 rendered DOM — not by calling store or IPC methods directly.
 
-**Status: 117/117 checks passing** (`npm run test:ui`, run against the live app).
+**Status: 129/129 checks passing** (`npm run test:ui`, run against the live app).
 Every row below has its own assertion in the suite.
 
 Run it with the app started as:
@@ -132,7 +132,9 @@ node tests/verify-ui.mjs
 - [x] 13.8 Permission mode selector changes the CLI flags
 
 ## 14. Terminal & run
-- [x] 14.1 Terminal opens and shows a prompt
+- [x] 14.1 Terminal opens on a real pseudo-terminal
+- [x] 14.1b The shell sees a tty of the right width
+- [x] 14.1c A full-screen program (less) runs and exits
 - [x] 14.2 A command runs and prints output
 - [x] 14.3 `cd` persists between commands
 - [x] 14.4 Run picker lists detected configurations
@@ -179,3 +181,15 @@ lexical core and the guard rails that make it refuse rather than guess.
 
 The prompt contract and the preamble cleanup are covered offline by
 `tests/test-explain.mjs` (17 checks).
+
+## 19. IDE parity
+- [x] 19.1 Find Action lists every editor action, not a shortlist
+- [x] 19.2 Recent Files (⌘E) lists what was opened
+- [x] 19.3 File Structure (⌘F12) lists this file's symbols
+- [x] 19.4 F11 bookmarks a line and ⇧F11 lists them
+- [x] 19.5 The editor splits into two groups and collapses again
+- [x] 19.6 Tabs have a context menu and can be dragged
+- [x] 19.7 The TODO panel finds tagged comments
+- [x] 19.8 Replace in Project previews and rewrites every match
+- [x] 19.9 A disk change under a dirty buffer is surfaced
+- [x] 19.10 Breakpoints carry conditions and log messages

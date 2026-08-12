@@ -401,6 +401,17 @@ export class LspManager {
     return this.send(language, 'workspace/symbol', { query })
   }
 
+  /**
+   * Runs a server-side command.
+   *
+   * Many code actions carry a `command` rather than an `edit` — the server does
+   * the work and pushes the result back as a `workspace/applyEdit`, which is
+   * already handled above. Without this, those actions simply do nothing.
+   */
+  executeCommand(language: string, command: string, args: unknown[]) {
+    return this.send(language, 'workspace/executeCommand', { command, arguments: args ?? [] })
+  }
+
   prepareRename(file: string, language: string, line: number, character: number) {
     return this.send(language, 'textDocument/prepareRename', this.docPos(file, line, character), 8000)
   }

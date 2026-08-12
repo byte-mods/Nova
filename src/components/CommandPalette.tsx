@@ -1,31 +1,33 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Boxes, ChevronRight, FileIcon, Terminal } from 'lucide-react'
+import { Bookmark as BookmarkIcon, Boxes, ChevronRight, Clock, FileIcon, Terminal } from 'lucide-react'
 import type { CodeSymbol } from '@shared/types'
 import { useStore } from '@/state/store'
 import { basename, relative } from '@/lib/paths'
 import { fileIcon } from '@/lib/fileIcons'
 import { symbolGlyph } from '@/lib/symbolGlyph'
-import { themes } from '@/theme/themes'
-import { newDiagramTab } from '@/components/diagram/diagramFile'
-import { REFACTORINGS } from '@/lib/refactor'
-import { currentSite, runRefactoring } from '@/lib/refactor/bridge'
+import { appActions, editorActions, rankActions, type Action } from '@/lib/actions'
+import { activeEditor } from '@/lib/refactor/bridge'
 
-interface Command {
-  id: string
-  label: string
-  hint?: string
-  run: () => void
-}
-
+/**
+ * One overlay, five modes: files (⌘P), symbols (⇧⌘O), recent files (⌘E),
+ * file structure (⌘F12), bookmarks (⇧F11) and Find Action (⇧⌘P).
+ *
+ * Find Action lists the app's commands *and* every action Monaco registered on
+ * the active editor, so anything the editor can do is reachable by name rather
+ * than only by shortcut.
+ */
 export default function CommandPalette() {
   const open = useStore((s) => s.paletteOpen)
   const mode = useStore((s) => s.paletteMode)
   const root = useStore((s) => s.root)
   const settings = useStore((s) => s.settings)
+  const recentFiles = useStore((s) => s.recentFiles)
+  const bookmarks = useStore((s) => s.bookmarks)
   const [query, setQuery] = useState('')
   const [index, setIndex] = useState(0)
   const [files, setFiles] = useState<string[]>([])
   const [symbols, setSymbols] = useState<CodeSymbol[]>([])
+  const [structure, setStructure] = useState<CodeSymbol[]>([])
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -62,116 +64,63 @@ export default function CommandPalette() {
     }
   }, [open, mode, query, root])
 
-  const commands = useMemo<Command[]>(() => {
+  // File structure reads the same document symbols the outline uses.
+  useEffect(() => {
+    if (!open || mode !== 'structure') return
     const store = useStore.getState()
-    const base: Command[] = [
-      { id: 'open-folder', label: 'File: Open Folder…', hint: '', run: () => void store.pickProject() },
-      { id: 'save-all', label: 'File: Save All', hint: '⇧⌘S', run: () => void store.saveAll() },
-      { id: 'new-diagram', label: 'Diagram: New Architecture Diagram', run: () => newDiagramTab() },
-      {
-        id: 'browser',
-        label: 'View: Open Built-in Browser',
-        run: () =>
-          store.openTab({
-            id: `browser:${Date.now()}`,
-            kind: 'browser',
-            title: 'Browser',
-            url: store.settings.browserHome,
-          }),
-      },
-      { id: 'toggle-ai', label: 'View: Toggle AI Console', hint: '⌘I', run: () => store.toggleAi() },
-      { id: 'toggle-panel', label: 'View: Toggle Panel', hint: '⌘J', run: () => store.togglePanel() },
-      {
-        id: 'toggle-sidebar',
-        label: 'View: Toggle Sidebar',
-        hint: '⌘B',
-        run: () => store.toggleSidebar(),
-      },
-      { id: 'terminal', label: 'Terminal: Show', hint: '⌃`', run: () => store.togglePanel('terminal') },
-      {
-        id: 'go-to-symbol',
-        label: 'Navigate: Go to Symbol in Project…',
-        hint: '⇧⌘O',
-        run: () => store.setPalette(true, 'symbol'),
-      },
-      {
-        id: 'usages',
-        label: 'Navigate: Show Find Usages Panel',
-        hint: '⌥F7',
-        run: () => store.togglePanel('usages'),
-      },
-      {
-        id: 'reindex',
-        label: 'Navigate: Rebuild Project Symbol Index',
-        run: () => void store.buildIndex(),
-      },
-      { id: 'git', label: 'Git: Show Source Control', hint: '⇧⌘G', run: () => store.setSidebarView('git') },
-      { id: 'git-refresh', label: 'Git: Refresh', run: () => void store.refreshCommits() },
-      {
-        id: 'settings',
-        label: 'Preferences: Open Settings',
-        run: () =>
-          store.openTab({ id: 'settings', kind: 'settings', title: 'Settings' }),
-      },
-      {
-        id: 'wrap',
-        label: `Editor: Turn Word Wrap ${settings.wordWrap ? 'Off' : 'On'}`,
-        run: () => store.setSettings({ wordWrap: !settings.wordWrap }),
-      },
-      {
-        id: 'minimap',
-        label: `Editor: Turn Minimap ${settings.minimap ? 'Off' : 'On'}`,
-        run: () => store.setSettings({ minimap: !settings.minimap }),
-      },
-      {
-        id: 'explain-file',
-        label: 'AI: Explain This File — docs, diagrams and a tutorial',
-        hint: '⌥⌘E',
-        run: () => {
-          const path = store.tabs.find((t) => t.id === store.activeTabId)?.path
-          if (!path) {
-            store.notify('Open a source file first.', 'error')
-            return
-          }
-          void store.explainFile(path)
-        },
-      },
-      {
-        id: 'refactor-this',
-        label: 'Refactor: Refactor This…',
-        hint: '⌃T',
-        run: () => useStore.setState({ refactorMenuOpen: true }),
-      },
-      ...REFACTORINGS.map((descriptor) => ({
-        id: `refactor:${descriptor.id}`,
-        label: `Refactor: ${descriptor.label}`,
-        hint: descriptor.shortcut,
-        run: () => {
-          const site = currentSite()
-          if (!site) {
-            store.notify('Open a file to refactor.', 'error')
-            return
-          }
-          void runRefactoring(descriptor.id, site)
-        },
-      })),
-      ...themes.map((theme) => ({
-        id: `theme:${theme.id}`,
-        label: `Theme: ${theme.name}`,
-        hint: theme.type,
-        run: () => store.setSettings({ themeId: theme.id }),
-      })),
-    ]
-    return base
-  }, [settings.wordWrap, settings.minimap])
+    const path = store.tabs.find((t) => t.id === store.activeTabId)?.path
+    if (!path) {
+      setStructure([])
+      return
+    }
+    let cancelled = false
+    void window.nova.code.documentSymbols(path).then((result) => {
+      if (!cancelled) setStructure(result)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [open, mode])
 
-  const filteredCommands = useMemo(() => {
-    const needle = query.toLowerCase().replace(/^>/, '').trim()
-    if (!needle) return commands
-    return commands.filter((c) => c.label.toLowerCase().includes(needle))
-  }, [commands, query])
+  const actions = useMemo<Action[]>(() => {
+    if (!open || mode !== 'command') return []
+    return [...appActions(), ...editorActions(activeEditor())]
+  }, [open, mode, settings.wordWrap, settings.minimap, settings.showBlame, settings.autoSave])
 
-  const items = mode === 'file' ? files : mode === 'symbol' ? symbols : filteredCommands
+  const filteredActions = useMemo(() => rankActions(actions, query), [actions, query])
+
+  const filteredRecent = useMemo(() => {
+    const needle = query.toLowerCase().trim()
+    const list = recentFiles.filter((p) => !needle || p.toLowerCase().includes(needle))
+    return list
+  }, [recentFiles, query])
+
+  const filteredBookmarks = useMemo(() => {
+    const needle = query.toLowerCase().trim()
+    if (!needle) return bookmarks
+    return bookmarks.filter(
+      (b) => b.preview.toLowerCase().includes(needle) || b.file.toLowerCase().includes(needle),
+    )
+  }, [bookmarks, query])
+
+  const filteredStructure = useMemo(() => {
+    const needle = query.toLowerCase().trim()
+    if (!needle) return structure
+    return structure.filter((symbol) => symbol.name.toLowerCase().includes(needle))
+  }, [structure, query])
+
+  const items: unknown[] =
+    mode === 'file'
+      ? files
+      : mode === 'symbol'
+        ? symbols
+        : mode === 'recent'
+          ? filteredRecent
+          : mode === 'structure'
+            ? filteredStructure
+            : mode === 'bookmarks'
+              ? filteredBookmarks
+              : filteredActions
   const clampedIndex = Math.min(index, Math.max(items.length - 1, 0))
 
   if (!open) return null
@@ -184,13 +133,42 @@ export default function CommandPalette() {
     } else if (mode === 'symbol') {
       const symbol = symbols[i]
       if (symbol) void store.openFile(symbol.file, { line: symbol.line, column: symbol.column })
+    } else if (mode === 'recent') {
+      const file = filteredRecent[i]
+      if (file) void store.openFile(file)
+    } else if (mode === 'structure') {
+      const symbol = filteredStructure[i]
+      if (symbol) void store.openFile(symbol.file, { line: symbol.line, column: symbol.column })
+    } else if (mode === 'bookmarks') {
+      const bookmark = filteredBookmarks[i]
+      if (bookmark) void store.openFile(bookmark.file, { line: bookmark.line, column: 1 })
     } else {
-      filteredCommands[i]?.run()
+      filteredActions[i]?.run()
     }
     store.setPalette(false)
   }
 
-  const nextMode = mode === 'file' ? 'symbol' : mode === 'symbol' ? 'command' : 'file'
+  const nextMode: Record<string, string> = {
+    file: 'symbol',
+    symbol: 'command',
+    command: 'recent',
+    recent: 'structure',
+    structure: 'bookmarks',
+    bookmarks: 'file',
+  }
+
+  const placeholder =
+    mode === 'file'
+      ? 'Search files by name…'
+      : mode === 'symbol'
+        ? 'Search classes, functions, variables…'
+        : mode === 'recent'
+          ? 'Recently opened files…'
+          : mode === 'structure'
+            ? 'Search this file’s symbols…'
+            : mode === 'bookmarks'
+              ? 'Search bookmarks…'
+              : 'Type an action…'
 
   return (
     <div className="overlay" onMouseDown={() => useStore.getState().setPalette(false)}>
@@ -199,13 +177,7 @@ export default function CommandPalette() {
           ref={inputRef}
           className="modal-input"
           value={query}
-          placeholder={
-            mode === 'file'
-              ? 'Search files by name…'
-              : mode === 'symbol'
-                ? 'Search classes, functions, variables…'
-                : 'Type a command…'
-          }
+          placeholder={placeholder}
           onChange={(e) => {
             setQuery(e.target.value)
             setIndex(0)
@@ -223,36 +195,37 @@ export default function CommandPalette() {
               choose(clampedIndex)
             } else if (e.key === 'Tab') {
               e.preventDefault()
-              useStore.getState().setPalette(true, nextMode)
+              useStore.getState().setPalette(true, nextMode[mode] as never)
             }
           }}
         />
+
         <div className="modal-list">
           {items.length === 0 && <div className="modal-item faint">No matches</div>}
-          {mode === 'symbol' &&
-            symbols.map((symbol, i) => (
+
+          {mode === 'command' &&
+            filteredActions.slice(0, 300).map((action, i) => (
               <button
-                key={`${symbol.file}:${symbol.line}:${symbol.name}:${i}`}
+                key={action.id}
                 className={`modal-item ${i === clampedIndex ? 'active' : ''}`}
                 onMouseEnter={() => setIndex(i)}
                 onClick={() => choose(i)}
               >
-                <span className="symbol-glyph" style={{ color: symbolGlyph(symbol.kind).color }}>
-                  {symbolGlyph(symbol.kind).glyph}
+                <Terminal size={13} className="faint" />
+                <span className="faint" style={{ minWidth: 74 }}>
+                  {action.category}
                 </span>
-                <span className="mono">{symbol.name}</span>
-                {symbol.container && (
-                  <span className="faint" style={{ fontSize: 11 }}>
-                    in {symbol.container}
+                <span>{action.label}</span>
+                {action.hint && (
+                  <span className="faint" style={{ marginLeft: 'auto' }}>
+                    {action.hint}
                   </span>
                 )}
-                <small>
-                  {basename(symbol.file)}:{symbol.line}
-                </small>
               </button>
             ))}
-          {mode === 'file' &&
-            files.map((file, i) => {
+
+          {(mode === 'file' || mode === 'recent') &&
+            (mode === 'file' ? files : filteredRecent).map((file, i) => {
               const { Icon, color } = fileIcon(file, settings.iconPack)
               return (
                 <button
@@ -261,52 +234,67 @@ export default function CommandPalette() {
                   onMouseEnter={() => setIndex(i)}
                   onClick={() => choose(i)}
                 >
-                  <Icon size={14} style={{ color, flexShrink: 0 }} />
+                  {mode === 'recent' ? (
+                    <Clock size={13} className="faint" />
+                  ) : (
+                    <Icon size={13} style={{ color }} />
+                  )}
                   <span>{basename(file)}</span>
-                  <small>{root ? relative(root, file) : file}</small>
+                  <span className="faint" style={{ marginLeft: 'auto' }}>
+                    {relative(root ?? '', file)}
+                  </span>
                 </button>
               )
             })}
-          {mode === 'command' &&
-            filteredCommands.map((command, i) => (
+
+          {(mode === 'symbol' || mode === 'structure') &&
+            (mode === 'symbol' ? symbols : filteredStructure).map((symbol, i) => {
+              const glyph = symbolGlyph(symbol.kind)
+              return (
+                <button
+                  key={`${symbol.file}:${symbol.line}:${symbol.name}`}
+                  className={`modal-item ${i === clampedIndex ? 'active' : ''}`}
+                  onMouseEnter={() => setIndex(i)}
+                  onClick={() => choose(i)}
+                >
+                  <span className="symbol-glyph" style={{ color: glyph.color }}>
+                    {glyph.glyph}
+                  </span>
+                  <span>{symbol.name}</span>
+                  {symbol.container && (
+                    <span className="faint">
+                      <ChevronRight size={10} /> {symbol.container}
+                    </span>
+                  )}
+                  <span className="faint" style={{ marginLeft: 'auto' }}>
+                    {mode === 'structure' ? `:${symbol.line}` : relative(root ?? '', symbol.file)}
+                  </span>
+                </button>
+              )
+            })}
+
+          {mode === 'bookmarks' &&
+            filteredBookmarks.map((bookmark, i) => (
               <button
-                key={command.id}
+                key={`${bookmark.file}:${bookmark.line}`}
                 className={`modal-item ${i === clampedIndex ? 'active' : ''}`}
                 onMouseEnter={() => setIndex(i)}
                 onClick={() => choose(i)}
               >
-                <ChevronRight size={13} style={{ flexShrink: 0 }} />
-                <span>{command.label}</span>
-                {command.hint && <small>{command.hint}</small>}
+                <BookmarkIcon size={13} style={{ color: 'var(--accent)' }} />
+                <span style={{ fontFamily: 'var(--font-mono, monospace)', fontSize: 11.5 }}>
+                  {bookmark.preview || '(empty line)'}
+                </span>
+                <span className="faint" style={{ marginLeft: 'auto' }}>
+                  {basename(bookmark.file)}:{bookmark.line}
+                </span>
               </button>
             ))}
         </div>
-        <div
-          className="row"
-          style={{
-            padding: '7px 12px',
-            borderTop: '1px solid var(--border)',
-            fontSize: 11,
-            color: 'var(--text-faint)',
-          }}
-        >
-          {mode === 'file' ? (
-            <FileIcon size={12} />
-          ) : mode === 'symbol' ? (
-            <Boxes size={12} />
-          ) : (
-            <Terminal size={12} />
-          )}
-          <span>
-            {mode === 'file'
-              ? 'Go to File'
-              : mode === 'symbol'
-                ? 'Go to Symbol in Project'
-                : 'Command Palette'}
-          </span>
-          <span style={{ marginLeft: 'auto' }}>
-            <span className="kbd">Tab</span> to switch mode · <span className="kbd">↵</span> to run
-          </span>
+
+        <div className="modal-foot faint">
+          <Boxes size={11} /> Tab switches mode · {items.length} result
+          {items.length === 1 ? '' : 's'}
         </div>
       </div>
     </div>

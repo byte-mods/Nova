@@ -22,6 +22,12 @@ export function registerDebugHandlers(ctx: Ctx) {
     session.toggleBreakpoint(file, line),
   )
   ipcMain.handle('debug:clearBreakpoints', () => session.clearBreakpoints())
+  ipcMain.handle(
+    'debug:updateBreakpoint',
+    (_e, file: string, line: number, patch: Record<string, unknown>) =>
+      session.updateBreakpoint(file, line, patch),
+  )
+  ipcMain.handle('debug:setRoot', (_e, root: string) => session.setProjectRoot(root))
 
   ipcMain.handle('debug:continue', () => session.continue_())
   ipcMain.handle('debug:next', () => session.next())
