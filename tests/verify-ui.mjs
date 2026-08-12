@@ -193,6 +193,13 @@ async function section1() {
     return { ok: t.includes('ui-demo'), detail: t.slice(0, 60) }
   })
 
+  await r.guard('1.2', 'breadcrumb reflects the active file', async () => {
+    await openFileByClick('src', 'orders.py')
+    await cdp.sleep(800)
+    const crumbs = await text('.titlebar-title')
+    return { ok: /src/.test(crumbs) && /orders\.py/.test(crumbs), detail: String(crumbs).slice(0, 60) }
+  })
+
   await r.guard('1.3', 'activity bar switches all 5 sidebar views', async () => {
     const seen = []
     for (let i = 0; i < 5; i++) {
@@ -276,6 +283,12 @@ async function section2() {
   })
 
   await r.guard('2.2', 'folder expands and collapses', async () => {
+    // Start collapsed: an earlier section may have left the folder open, and
+    // the first click would then collapse rather than expand it.
+    await cdp.evaluate(`
+      const s=(await import('/src/state/store.ts')).useStore
+      s.getState().setExpanded(s.getState().root + '/src', false); return true`)
+    await cdp.sleep(500)
     await cdp.clickText('.tree-row', 'src', { settle: 700 })
     const expanded = await cdp.evaluate(
       `return [...document.querySelectorAll('.tree-row')].some(e => e.textContent.includes('orders.py'))`,
@@ -309,6 +322,26 @@ async function section2() {
       ok: wanted.every((w) => items.some((i) => i.includes(w))),
       detail: JSON.stringify(items),
     }
+  })
+
+  await r.guard('2.5', 'new file is created from the header button', async () => {
+    await cdp.click('[title="New file"]', { settle: 700 })
+    const input = await cdp
+      .waitFor(`document.querySelectorAll('.tree-row input').length > 0`, { label: 'inline input' })
+      .then(() => true)
+      .catch(() => false)
+    if (!input) return { ok: false, detail: 'no inline input appeared' }
+    await cdp.type('scratch-note.txt')
+    await cdp.key('Enter')
+    await cdp.sleep(1800)
+    const onDisk = await fs
+      .access(path.join(PROJECT, 'scratch-note.txt'))
+      .then(() => true)
+      .catch(() => false)
+    const inTree = await cdp.evaluate(
+      `return [...document.querySelectorAll('.tree-row')].some(e => e.textContent.includes('scratch-note.txt'))`,
+    )
+    return { ok: onDisk && inTree, detail: `disk=${onDisk} tree=${inTree}` }
   })
 
   await r.guard('2.6', 'git decorations appear on modified files', async () => {
@@ -1099,6 +1132,15 @@ def test_deliberately_fails():
     }
   })
 
+  await r.guard('11.4', 'failure output expands', async () => {
+    const failing = await cdp.boxOfText('.usages-body .tree-row', 'deliberately_fails')
+    if (!failing) return { ok: false, detail: 'no failing test row' }
+    await cdp.clickPoint(failing)
+    await cdp.sleep(900)
+    const detail = await text('.test-failure')
+    return { ok: Boolean(detail && detail.length > 20), detail: String(detail).slice(0, 80) }
+  })
+
   await r.guard('11.5', 'gutter markers offer to run a single test', async () => {
     await openFileByClick('tests', 'test_orders.py', 2600)
     const markers = await cdp
@@ -1510,6 +1552,25 @@ async function section15() {
     )
     await cdp.clickText('.toggle-row .toggle', 'Word wrap', { settle: 700 })
     return { ok: before !== after, detail: `${before} -> ${after}` }
+  })
+
+  await r.guard('15.5', 'icon pack switch changes tree icons', async () => {
+    const readIcons = `
+      const s=(await import('/src/state/store.ts')).useStore
+      s.setState({ sidebarVisible: true, sidebarView: 'explorer' })
+      await new Promise(r=>setTimeout(r,500))
+      return [...document.querySelectorAll('.tree-row svg')].slice(0,6)
+        .map(e => getComputedStyle(e).color).join('|')`
+    const before = await cdp.evaluate(readIcons)
+    await cdp.evaluate(`
+      const s=(await import('/src/state/store.ts')).useStore
+      s.getState().setSettings({ iconPack: 'minimal' }); return true`)
+    await cdp.sleep(900)
+    const after = await cdp.evaluate(readIcons)
+    await cdp.evaluate(`
+      const s=(await import('/src/state/store.ts')).useStore
+      s.getState().setSettings({ iconPack: 'nova' }); return true`)
+    return { ok: Boolean(before) && before !== after, detail: `${before.slice(0, 40)} -> ${after.slice(0, 40)}` }
   })
 
   await r.guard('15.6', 'language servers and debuggers listed with status', async () => {

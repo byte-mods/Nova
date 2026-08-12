@@ -5,9 +5,8 @@ by `tests/verify-ui.mjs`, which drives the running app through **real UI
 interaction** (clicking elements, typing, keyboard shortcuts) and asserts on the
 rendered DOM — not by calling store or IPC methods directly.
 
-**Status: 98/98 checks passing** (`node tests/verify-ui.mjs`, last run against the
-live app). Items 3.4 and 9.6 are covered inside neighbouring checks; every other
-row has its own assertion.
+**Status: 102/102 checks passing** (`npm run test:ui`, run against the live app).
+Every row below has its own assertion in the suite.
 
 Run it with the app started as:
 

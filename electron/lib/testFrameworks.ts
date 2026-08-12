@@ -107,6 +107,18 @@ const cargo: TestFramework = {
       },
     ]
   },
+  /** libtest prints each failure's captured output under `---- name stdout ----`. */
+  parseFinal: (output) => {
+    const events: TestEvent[] = []
+    const parts = output.split(/\n-{4}\s+(\S+)\s+stdout\s+-{4}\n/)
+    for (let i = 1; i < parts.length; i += 2) {
+      const name = parts[i]
+      const body = (parts[i + 1] ?? '').split(/\nfailures:/)[0].trim()
+      if (!body) continue
+      events.push({ type: 'result', id: name, name, status: 'fail', message: body.slice(0, 4000) })
+    }
+    return events
+  },
 }
 
 /* ---------------- Python ---------------- */
@@ -123,7 +135,9 @@ const pytest: TestFramework = {
     ctx.rootFiles.has('tox.ini') ||
     ctx.rootFiles.has('conftest.py'),
   command: (scope, ctx) => {
-    const args = ['-v', '--no-header', '-rN', '--color=no']
+    // `-rf` prints a one-line reason per failure, which pairs each traceback
+    // with its full `file::name` id.
+    const args = ['-v', '--no-header', '-rf', '--color=no']
     if (scope.kind === 'file' && scope.file) args.push(ctx.relative(scope.file))
     else if (scope.kind === 'name' && scope.file && scope.name) {
       args.push(`${ctx.relative(scope.file)}::${scope.name}`)
@@ -145,6 +159,39 @@ const pytest: TestFramework = {
           ? 'skip'
           : 'fail'
     return [{ type: 'result', id: `${file}::${name}`, name, suite: file, status }]
+  },
+  /**
+   * Attaches each failure's traceback. pytest prints them in a FAILURES section
+   * keyed by test name only, so the ids are recovered from the verbose lines.
+   */
+  parseFinal: (output) => {
+    const section = output.split(/=+\s*FAILURES\s*=+/)[1]
+    if (!section) return []
+
+    const idByName = new Map<string, { id: string; suite: string }>()
+    for (const line of output.split('\n')) {
+      const match = PYTEST_LINE.exec(line.trim())
+      if (match) idByName.set(match[2], { id: `${match[1]}::${match[2]}`, suite: match[1] })
+    }
+
+    const events: TestEvent[] = []
+    // `______ test_name ______` separates the blocks.
+    const parts = section.split(/\n_{3,}\s+(\S+)\s+_{3,}\n/)
+    for (let i = 1; i < parts.length; i += 2) {
+      const name = parts[i]
+      const body = (parts[i + 1] ?? '').split(/\n=+\s*short test summary/)[0].trim()
+      const known = idByName.get(name)
+      if (!known || !body) continue
+      events.push({
+        type: 'result',
+        id: known.id,
+        name,
+        suite: known.suite,
+        status: 'fail',
+        message: body.slice(0, 4000),
+      })
+    }
+    return events
   },
 }
 
