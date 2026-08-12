@@ -40,6 +40,14 @@ async function buildContext(root: string): Promise<FrameworkContext> {
 
 let current: ChildProcess | null = null
 
+function spawnRunner(command: string, args: string[], cwd: string) {
+  return spawn(command, args, {
+    cwd,
+    env: toolEnv({ NO_COLOR: '1', FORCE_COLOR: '0', CI: '1' }),
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+}
+
 export function registerTestHandlers(ctx: Ctx) {
   ipcMain.handle('tests:detect', async (_e, root: string): Promise<TestFrameworkInfo[]> => {
     const context = await buildContext(root)
@@ -79,16 +87,13 @@ export function registerTestHandlers(ctx: Ctx) {
 
       if (current) current.kill('SIGTERM')
 
-      const { command, args } = framework.command(scope, context)
       const started = Date.now()
-      const child = spawn(command, args, {
-        cwd: root,
-        env: toolEnv({ NO_COLOR: '1', FORCE_COLOR: '0', CI: '1' }),
-        stdio: ['ignore', 'pipe', 'pipe'],
-      })
+      let usedFallback = false
+      let { command, args } = framework.command(scope, context)
+      let child = spawnRunner(command, args, root)
       current = child
 
-      const commandLine = `${command} ${args.join(' ')}`
+      let commandLine = `${command} ${args.join(' ')}`
       const emit = (events: TestEvent[], done?: { exitCode: number | null; durationMs: number }) => {
         if (events.length === 0 && !done) return
         ctx.broadcast('tests:update', {
@@ -121,20 +126,28 @@ export function registerTestHandlers(ctx: Ctx) {
         emit(events)
       }
 
-      child.stdout?.setEncoding('utf8')
-      child.stdout?.on('data', consume)
-      child.stderr?.setEncoding('utf8')
-      child.stderr?.on('data', consume)
-
-      child.on('error', (err) => {
-        emit(
-          [{ type: 'output', text: `${command}: ${err.message}\n` }],
-          { exitCode: 127, durationMs: Date.now() - started },
-        )
+      const onError = (err: NodeJS.ErrnoException) => {
+        // Retry once through the fallback launcher when the binary is missing.
+        if (err.code === 'ENOENT' && framework.fallback && !usedFallback) {
+          usedFallback = true
+          const next = framework.fallback(scope, context)
+          command = next.command
+          args = next.args
+          commandLine = `${command} ${args.join(' ')}`
+          emit([{ type: 'output', text: `not found on PATH, retrying: $ ${commandLine}\n` }])
+          child = spawnRunner(command, args, root)
+          current = child
+          wire(child)
+          return
+        }
+        emit([{ type: 'output', text: `${command}: ${err.message}\n` }], {
+          exitCode: 127,
+          durationMs: Date.now() - started,
+        })
         current = null
-      })
+      }
 
-      child.on('close', (code) => {
+      const onClose = (code: number | null) => {
         const tail: TestEvent[] = []
         if (pending.trim()) {
           if (framework.parseLine) tail.push(...framework.parseLine(pending))
@@ -143,8 +156,18 @@ export function registerTestHandlers(ctx: Ctx) {
         if (framework.parseFinal) tail.push(...framework.parseFinal(full))
         emit(tail, { exitCode: code, durationMs: Date.now() - started })
         current = null
-      })
+      }
 
+      function wire(target: typeof child) {
+        target.stdout?.setEncoding('utf8')
+        target.stdout?.on('data', consume)
+        target.stderr?.setEncoding('utf8')
+        target.stderr?.on('data', consume)
+        target.on('error', onError)
+        target.on('close', onClose)
+      }
+
+      wire(child)
       return { runId }
     },
   )

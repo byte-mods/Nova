@@ -58,6 +58,7 @@ const api = {
     rename: (from: string, to: string): Promise<void> => ipcRenderer.invoke('fs:rename', from, to),
     trash: (file: string): Promise<void> => ipcRenderer.invoke('fs:trash', file),
     exists: (file: string): Promise<boolean> => ipcRenderer.invoke('fs:exists', file),
+    realpath: (target: string): Promise<string> => ipcRenderer.invoke('fs:realpath', target),
     search: (root: string, query: string, opts?: unknown): Promise<SearchHit[]> =>
       ipcRenderer.invoke('fs:search', root, query, opts),
     findFiles: (root: string, query: string): Promise<string[]> =>

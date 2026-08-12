@@ -43,7 +43,7 @@ export default function WelcomeView() {
             >
               <Globe size={15} /> Open built-in browser
             </button>
-            <button className="welcome-action" onClick={() => useStore.getState().togglePanel('terminal')}>
+            <button className="welcome-action" onClick={() => useStore.getState().showPanel('terminal')}>
               <Terminal size={15} /> Open terminal
             </button>
             <button className="welcome-action" onClick={() => useStore.getState().toggleAi()}>

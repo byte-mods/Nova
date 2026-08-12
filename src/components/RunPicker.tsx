@@ -36,7 +36,7 @@ export default function RunPicker() {
   const run = (config: RunConfig) => {
     setSelected(config.id)
     setOpen(false)
-    useStore.getState().togglePanel('terminal')
+    useStore.getState().showPanel('terminal')
     // Give the terminal a beat to mount before handing it a command.
     setTimeout(() => {
       window.dispatchEvent(

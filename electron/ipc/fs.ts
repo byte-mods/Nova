@@ -33,7 +33,8 @@ export function registerFsHandlers(ctx: Ctx) {
     const entries = await fs.readdir(dir, { withFileTypes: true })
     const out: DirEntry[] = []
     for (const entry of entries) {
-      if (entry.name === '.DS_Store') continue
+      // `.git` is noise in the tree and its contents are never editable here.
+      if (entry.name === '.DS_Store' || entry.name === '.git') continue
       const full = path.join(dir, entry.name)
       const isDirectory = entry.isDirectory() || (entry.isSymbolicLink() && isDirSafe(full))
       let size: number | undefined
@@ -98,6 +99,19 @@ export function registerFsHandlers(ctx: Ctx) {
     }
     await fs.mkdir(path.dirname(file), { recursive: true })
     await fs.writeFile(file, content, 'utf8')
+  })
+
+  /**
+   * Canonical path with symlinks resolved. Git reports the resolved worktree
+   * root (on macOS `/var` -> `/private/var`), so the project root must be
+   * resolved too or absolute paths never compare equal.
+   */
+  ipcMain.handle('fs:realpath', async (_e, target: string) => {
+    try {
+      return await fs.realpath(target)
+    } catch {
+      return target
+    }
   })
 
   ipcMain.handle('history:list', (_e, file: string) => listHistory(projectRoot, file))

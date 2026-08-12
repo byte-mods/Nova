@@ -302,7 +302,8 @@ in the browser pane are stripped of any preload and cannot reach it at all.
 | --- | --- |
 | `npm run test:offline` | pure logic — declaration parsing, the symbol index, the edit applier, test-framework detection and parsing |
 | `npm run test:tools` | real tooling — clangd + rust-analyzer over LSP, debugpy over DAP, inlay hints and call hierarchy |
-| `tests/verify-*.mjs` | drive the running IDE over the DevTools protocol |
+| `npm run test:ui` | **98 UI checks** driving the running app with real clicks and keystrokes over CDP — see [`tests/FEATURES.md`](tests/FEATURES.md) |
+| `tests/verify-*.mjs` | focused live-app suites (AI console, browser pane, feature sweep) |
 
 The live suites need the app running with a debug port:
 
@@ -311,8 +312,11 @@ NOVA_DEBUG_PORT=9223 npm run dev
 ```
 
 ```bash
-node tests/verify-app.mjs
+npm run test:ui
 ```
+
+`tests/restart-app.sh` restarts the app with the port free, which is needed
+after any main-process change.
 
 ## Building a distributable
 

@@ -249,6 +249,8 @@ interface State {
   toggleSidebar: () => void
   toggleAi: () => void
   togglePanel: (tab?: State['panelTab']) => void
+  /** Always reveals the panel on `tab` — never toggles it shut. */
+  showPanel: (tab: State['panelTab']) => void
   toggleExpanded: (path: string) => void
   setExpanded: (path: string, value: boolean) => void
   bumpTree: () => void
@@ -358,7 +360,11 @@ export const useStore = create<State>((set, get) => ({
     void nova().app.writeSettings(settings)
   },
 
-  async openProject(path) {
+  async openProject(requestedPath) {
+    // Resolve symlinks first: git reports the real worktree path, and every
+    // path comparison in the app (git decorations, diffs, blame) depends on
+    // the two agreeing.
+    const path = await nova().fs.realpath(requestedPath)
     set({
       root: path,
       tabs: [],
@@ -527,6 +533,10 @@ export const useStore = create<State>((set, get) => ({
     const { panelVisible, panelTab } = get()
     if (tab && tab !== panelTab) set({ panelTab: tab, panelVisible: true })
     else set({ panelVisible: !panelVisible })
+  },
+
+  showPanel(tab) {
+    set({ panelTab: tab, panelVisible: true })
   },
 
   toggleExpanded(path) {

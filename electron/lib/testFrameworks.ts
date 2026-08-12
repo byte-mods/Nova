@@ -23,6 +23,12 @@ export interface TestFramework {
   /** The command to run for a scope. */
   command: (scope: TestScope, ctx: FrameworkContext) => { command: string; args: string[] }
   /**
+   * Used when the primary command is not on PATH. Test runners are frequently
+   * importable without their launcher script being installed globally
+   * (`python3 -m pytest`, `npx jest`), so this keeps them usable.
+   */
+  fallback?: (scope: TestScope, ctx: FrameworkContext) => { command: string; args: string[] }
+  /**
    * Incremental parser. Called with each stdout/stderr chunk split into lines,
    * returns any test events recognised. `flush` is called at process exit with
    * the complete output, for frameworks that only emit JSON at the end.
@@ -123,6 +129,10 @@ const pytest: TestFramework = {
       args.push(`${ctx.relative(scope.file)}::${scope.name}`)
     }
     return { command: 'pytest', args }
+  },
+  fallback: (scope, ctx) => {
+    const { args } = pytest.command(scope, ctx)
+    return { command: 'python3', args: ['-m', 'pytest', ...args] }
   },
   parseLine: (line) => {
     const match = PYTEST_LINE.exec(line.trim())
@@ -231,6 +241,7 @@ const gradle: TestFramework = {
     if (scope.kind === 'name' && scope.name) args.push('--tests', scope.name)
     return { command: './gradlew', args }
   },
+  fallback: (scope, ctx) => ({ command: 'gradle', args: gradle.command(scope, ctx).args }),
 }
 
 const maven: TestFramework = {

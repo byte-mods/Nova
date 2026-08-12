@@ -118,7 +118,7 @@ export default function BrowserPane({ tabId, initialUrl }: { tabId: string; init
       useStore.getState().notify('No dev script found in package.json', 'error')
       return
     }
-    useStore.getState().togglePanel('terminal')
+    useStore.getState().showPanel('terminal')
     window.dispatchEvent(
       new CustomEvent('nova:run-command', { detail: { command: detected.command } }),
     )
@@ -238,7 +238,13 @@ export default function BrowserPane({ tabId, initialUrl }: { tabId: string; init
       <div className="browser-stage">
         <div
           className="browser-frame"
-          style={width ? { width, maxWidth: '100%', margin: '0 auto' } : undefined}
+          // `flex: 1` in the stylesheet has a 0% basis, which would win over
+          // `width`; a fixed preset must opt out of flexing to take effect.
+          style={
+            width
+              ? { flex: '0 0 auto', width, maxWidth: '100%', margin: '0 auto' }
+              : undefined
+          }
         >
           {failure && (
             <div className="browser-error">
