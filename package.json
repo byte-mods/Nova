@@ -4,6 +4,15 @@
   "private": true,
   "description": "Nova IDE \u2014 a full-featured desktop IDE with a built-in Chromium browser, diagram designer, git integration and an AI console powered by the Claude and Codex CLIs.",
   "author": "Nova IDE",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/byte-mods/Nova.git"
+  },
+  "homepage": "https://github.com/byte-mods/Nova#readme",
+  "bugs": {
+    "url": "https://github.com/byte-mods/Nova/issues"
+  },
   "main": "dist-electron/main.js",
   "type": "module",
   "scripts": {

@@ -5,7 +5,7 @@ by `tests/verify-ui.mjs`, which drives the running app through **real UI
 interaction** (clicking elements, typing, keyboard shortcuts) and asserts on the
 rendered DOM — not by calling store or IPC methods directly.
 
-**Status: 102/102 checks passing** (`npm run test:ui`, run against the live app).
+**Status: 117/117 checks passing** (`npm run test:ui`, run against the live app).
 Every row below has its own assertion in the suite.
 
 Run it with the app started as:
@@ -152,3 +152,30 @@ node tests/verify-ui.mjs
 - [x] 16.2 Revisions listed after edits
 - [x] 16.3 Diff against current shown
 - [x] 16.4 Restore rewrites the file
+
+## 17. Refactoring
+- [x] 17.1 Refactor This (⌃T) lists every refactoring that applies here
+- [x] 17.2 Entries needing a selection are disabled, with the reason shown
+- [x] 17.3 Extract Variable replaces the statement rather than stranding it
+- [x] 17.4 Extract Method moves the body out and calls it, with `self`
+- [x] 17.5 Extract Constant hoists to file scope below the imports
+- [x] 17.6 Change Signature hides `self` and rewrites call sites across files
+- [x] 17.7 Safe Delete refuses while references remain and lists them
+- [x] 17.8 Move File renames on disk and recomputes relative imports
+
+The engine itself is pure logic and is covered separately by
+`npm run test:offline` (`tests/test-refactor.mjs`, 76 checks): every
+refactoring, across TypeScript, JavaScript, Python, Java and Go, plus the
+lexical core and the guard rails that make it refuse rather than guess.
+
+## 18. Explain (AI walkthrough)
+- [x] 18.1 Explain button is offered above an open source file
+- [x] 18.2 It is disabled where there is nothing to explain
+- [x] 18.3 Clicking it opens a walkthrough tab and starts a read-only run
+- [x] 18.4 The document streams to completion
+- [x] 18.5 Sections, tables and live Mermaid diagrams render
+- [x] 18.6 Save as Markdown writes the document into the project
+- [x] 18.7 The run edits nothing and leaves the AI conversation alone
+
+The prompt contract and the preamble cleanup are covered offline by
+`tests/test-explain.mjs` (17 checks).

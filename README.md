@@ -1,311 +1,229 @@
-# Nova IDE
+<div align="center">
 
-A desktop IDE built on Electron + React + TypeScript. Editor, embedded Chromium
-browser, architecture/UML diagram designer, Git client and an AI console that
-pipes to the `claude` and `codex` CLIs — all in one window.
+# Nova
 
-```bash
-npm install
-npm run dev
-```
+**A desktop IDE that brings IntelliJ-grade code intelligence, a Chromium browser, a diagram designer and an AI pair to one window — with no language server required.**
 
-Tests:
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+[![Electron](https://img.shields.io/badge/Electron-43-47848F?logo=electron&logoColor=white)](https://www.electronjs.org/)
+[![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)](https://react.dev/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.5-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![Tests](https://img.shields.io/badge/tests-117%20UI%20%2B%20120%20offline-brightgreen.svg)](tests/FEATURES.md)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%C2%B7%20Linux%20%C2%B7%20Windows-lightgrey.svg)](docs/INSTALLATION.md)
 
-```bash
-npm test
-```
+<img src="docs/screenshot.png" alt="Nova IDE — editor, project tree, symbol index and the Explain button" width="100%">
+
+</div>
 
 ---
 
-## What's in it
+## What it is
 
-### Editor
+Nova is a full IDE in an Electron window: the Monaco editor, a project-wide symbol
+index, thirteen refactorings, a debugger, a test runner, Git, a real Chromium
+pane, a UML/architecture diagram designer, and an AI console wired to the
+`claude` and `codex` CLIs.
 
-Monaco, the same engine VS Code uses, with grammars for every popular language
-(TypeScript, JavaScript, Python, Go, Rust, Java, Kotlin, Swift, C/C++, C#, PHP,
-Ruby, Dart, Elixir, SQL, GraphQL, Terraform, shell, YAML/TOML, and more — see
-[`src/lib/language.ts`](src/lib/language.ts)).
+Two things make it unusual:
 
-- Tabs with preview-on-single-click, dirty markers, middle-click close
-- Go to file (`⌘P`), command palette (`⇧⌘P`), project-wide search (`⇧⌘F`)
-- Problems panel fed by Monaco diagnostics
-- Bracket-pair colouring, sticky scroll, minimap, indent guides
+**It works with nothing installed.** The whole project is indexed on open by a
+per-language declaration parser, and that index — not a language server — drives
+go-to-definition, find usages, go-to-symbol, autocomplete and every refactoring.
+Install a language server and everything becomes type-aware; don't, and it still
+works.
 
-### Code navigation
+**It explains itself.** An **Explain** button above any open file generates a
+full walkthrough of that code — the theory behind it, a step-by-step trace,
+live Mermaid system-design diagrams, and a build-it-yourself tutorial.
 
-The whole project is indexed on open, and the index drives IntelliJ-style
-navigation:
+---
 
-- **⌘/Ctrl + click** (or `F12`) on any identifier jumps to its declaration,
-  across files. Hold ⌘ to see the link underline first.
-- **⌥F7** — *Find Usages*: every reference in the project, grouped by file in a
-  dedicated panel, each labelled `declaration` / `usage` / `import`. Matches
-  inside comments and string literals are separated behind a toggle.
-- **⇧F12** — peek references inline.
-- **⇧⌘O** — *Go to Symbol in Project*: fuzzy search every class, function,
-  method, constant and global, with kind badges and containers.
-- **⌘⇧O** in the editor, or the outline via Monaco's document symbols.
+## Install
 
-Declarations are parsed per language rather than through a language server, so
-navigation works with no extra tooling installed and covers the whole popular
-set: TypeScript/JavaScript, Python, Go, Rust, Java, Kotlin, Scala, Swift,
-Objective-C, C, C++, C#, Ruby, PHP, Dart, Elixir, Erlang, Haskell, Clojure, Lua,
-R, Julia, Perl, shell, PowerShell, SQL, GraphQL, Protobuf, HCL/Terraform,
-Solidity, CSS/SCSS, F#, Visual Basic and Pascal. Anything else falls back to a
-generic declaration pattern.
+Requires **Node.js 20+** and npm.
 
-The index is incremental — the file watcher re-parses only what changed, so
-edits (including the AI console's) are reflected immediately. On a 1,200-file
-tree it builds in ~0.5 s and answers a find-usages query in ~20 ms.
+```bash
+git clone https://github.com/byte-mods/Nova.git
+```
 
-### Autocomplete
+```bash
+cd Nova && npm install
+```
 
-Completion has two layers, so **every language gets suggestions**:
+```bash
+npm run dev
+```
 
-1. **Project symbols** — the index feeds Monaco a completion provider for every
-   language, so typing `Order` suggests the `OrderService` class from anywhere
-   in the tree, with its kind, container and source line. No tooling required.
-2. **Language server** — when one is installed it takes over completion for its
-   languages with real type awareness, and the index provider steps aside.
+That is the whole setup. Language servers, debug adapters and the AI CLIs are all
+optional — Nova detects whatever is on your `PATH` and degrades cleanly when
+something is missing.
 
-TypeScript/JavaScript additionally get Monaco's bundled TS worker. Word-based
-suggestions from all open documents are on as well.
+> **npm 10.9+ blocks install scripts**, so Electron's binary may not download.
+> If you see `Electron failed to install correctly`, run
+> `npm install-scripts approve electron` and reinstall. Full instructions,
+> optional tooling and platform notes: **[docs/INSTALLATION.md](docs/INSTALLATION.md)**
 
-### Language servers
+---
 
-When a language server is already on your `PATH`, Nova speaks LSP to it and the
-navigation above becomes *type-aware* — `service.create()` resolves to the method
-on that receiver rather than every `create` in the project. Nothing is bundled
-and nothing is required: without a server, everything falls back to the symbol
-index.
+## Features
 
-What the LSP layer adds:
+A short tour. The complete reference is in **[docs/FEATURES.md](docs/FEATURES.md)**.
 
-| | |
-| --- | --- |
-| Completion | context- and type-aware, with snippets and auto-imports |
-| Diagnostics | live squiggles from the compiler, listed in the Problems panel |
-| Hover | real signatures and doc comments |
-| Signature help | parameter hints while typing a call |
-| **Rename** (`⇧F6` / `F2`) | safe, scope-aware, applied across every file |
-| **Quick fixes** (`⌥⏎`) | the server's code actions, including multi-file ones |
-| Format document | `⌥⌘L` |
-| Go to implementation | `⌥⌘B` |
-| Inlay hints | inline parameter and type hints |
-| Call hierarchy | who calls this, and what it calls |
-| Type hierarchy | supertypes and subtypes (where the server supports it) |
+### Code intelligence without tooling
 
-Rename and multi-file quick fixes show a **preview** first — the affected files,
-the edit count and a diff per file — before anything is written. They apply
-through Nova's own `WorkspaceEdit` applier rather than Monaco's, because the
-standalone editor cannot edit files it has no model for. Edits are applied last-first per file, conflicting edits are
-refused rather than half-applied, and open buffers are routed through the editor
-so undo still works.
+The project is indexed on open — a 1,200-file tree builds in ~0.5 s and answers a
+find-usages query in ~20 ms. The index is incremental, so edits (including the AI
+console's) land immediately.
 
-24 servers are pre-configured (see Settings › Language servers for the list and
-install command for each): `typescript-language-server`, `pyright`, `pylsp`,
-`gopls`, `rust-analyzer`, `clangd`, `sourcekit-lsp`, `jdtls`,
-`kotlin-language-server`, `csharp-ls`, `ruby-lsp`, `solargraph`, `intelephense`,
-`dart`, `elixir-ls`, `lua-language-server`, `bash-language-server`,
-`yaml-language-server`, the `vscode-langservers-extracted` trio,
-`terraform-ls`, `haskell-language-server` and `sqls`.
+- **⌘-click / `F12`** — go to definition, across files
+- **⌥F7** — find usages, grouped by file, each labelled *declaration* / *usage* /
+  *import*, with comment and string matches behind a toggle
+- **⇧⌘O** — go to symbol in project, with kind badges and containers
+- **Autocomplete** in every language, fed by the index
 
-### Debugging
+Declarations are parsed per language, covering TypeScript/JavaScript, Python, Go,
+Rust, Java, Kotlin, Scala, Swift, Objective-C, C, C++, C#, Ruby, PHP, Dart,
+Elixir, Erlang, Haskell, Clojure, Lua, R, Julia, Perl, shell, PowerShell, SQL,
+GraphQL, Protobuf, HCL/Terraform, Solidity, CSS/SCSS, F#, Visual Basic and
+Pascal.
 
-Nova speaks the **Debug Adapter Protocol**, so any adapter on your `PATH`
-works: breakpoints in the gutter, step over/into/out, call stack, scoped
-variables with expandable values, watch expressions, and a debug console.
-`debugpy`, `dlv`, `lldb-dap` and `codelldb` are pre-configured — see
-Settings › Debuggers.
+### Thirteen refactorings, on IntelliJ's keymap
 
-| | |
-| --- | --- |
-| `F5` | Start / continue |
-| `⇧F5` | Stop |
-| `F10` | Step over |
-| `F11` / `⇧F11` | Step into / out |
-| gutter click | Toggle breakpoint (⌥-click on a test line) |
+<img src="docs/refactor.png" alt="The Extract Variable preview: affected files, edit count and a per-file diff" width="100%">
 
-### Tests
+**⌃T** opens *Refactor This* — everything that applies where the caret is, with
+the rest explaining why they don't.
 
-Test frameworks are detected from the project — go, cargo, pytest, vitest, jest,
-rspec, PHPUnit, Gradle, Maven, or an npm `test` script. Results appear as a
-grouped tree with pass/fail/skip counts, durations and failure output; a green
-▶ in the gutter runs a single test. Go, cargo, pytest, jest and vitest are
-parsed into per-test results; anything else still runs and streams its output.
+| | | | |
+|---|---|---|---|
+| `⌥⌘V` Extract Variable | `⌥⌘C` Extract Constant | `⌥⌘F` Extract Field | `⌥⌘M` Extract Method |
+| `⌥⌘P` Extract Parameter | `⌥⌘N` Inline Variable | Inline Method | `⌘F6` Change Signature |
+| Introduce Parameter Object | `F6` Move File | Move Class | Pull Up · Push Down |
+| `⌘⌫` Safe Delete | | | |
 
-### Local History
+Every one ends in the preview above — affected files, edit count, per-file diff —
+before a byte is written. None of them needs a language server.
 
-Every overwrite of a file is snapshotted, independent of Git — including the
-ones the AI console makes. Right-click a file → **Local History** to browse
-revisions and diff or restore any of them. Snapshots coalesce within a minute,
-keep 60 revisions per file, and expire after 30 days.
+The engine masks strings and comments, then reasons over what is left. That is
+why it works on any project with no tooling, and why it **refuses rather than
+guesses**: a variable assigned twice won't inline, a selection producing two live
+values won't extract, and a language with no profile says so instead of writing
+something plausible-looking.
 
-### Markdown reader
+### Explain this file
 
-Split source/preview with GitHub-flavoured rendering, tables, task lists, and
-**live Mermaid rendering** for ` ```mermaid ` fences. Fenced code blocks are
-syntax-highlighted with Monaco, so they always match the active theme.
+<img src="docs/explain.png" alt="A generated walkthrough with a live Mermaid system-design diagram" width="100%">
 
-### Diagram designer
+Press the **Explain** button (or `⌥⌘E`). A read-only agent run reads the file —
+optionally its imports, callers and tests too — and streams back:
 
-`.nova-diagram.json` files open in a dedicated editor with two modes:
+1. what it is, in one paragraph
+2. **the concept behind it** — the algorithm, pattern or protocol it instantiates
+3. how it works, step by step, against the real identifiers
+4. **system design** — a component flowchart, a sequence diagram of one full
+   operation, plus class or ER diagrams where the file warrants them
+5. a table of everything it exposes
+6. the design decisions, and what each one costs
+7. **build it yourself** — a tutorial reconstructing the idea from nothing
+8. pitfalls, and three exercises against this codebase
 
-- **Canvas** — drag-and-drop nodes on a snapping grid, ten shapes (rounded, UML
-  class, datastore cylinder, queue hexagon, decision diamond, cloud, actor,
-  note…), **50 swappable icons per node**, per-node colours, pan/zoom, fit to
-  content, and SVG/PNG export.
-- **Mermaid** — a live-preview source editor for sequence, class, ER, state, C4
-  and flowchart diagrams.
+Diagrams render live as they arrive, in the active theme. The run is isolated
+from the AI console and uses plan-mode permissions, so a walkthrough can never
+edit the thing it describes. Copy it, or save it into the project as Markdown.
 
-UML relationships are first class: association, dependency, inheritance,
-implementation, composition and aggregation each render with the correct
-arrowhead and line style.
+### Debugging, tests and language servers
 
-Six starter templates ship in the Diagrams sidebar: blank, microservices,
-layered architecture, UML class diagram, sequence diagram and C4 context.
+- **Debug Adapter Protocol** — breakpoints, step over/into/out, call stack,
+  scoped variables, watch expressions, debug console. `debugpy`, `dlv`,
+  `lldb-dap` and `codelldb` are pre-configured.
+- **Tests** — frameworks detected from the project (go, cargo, pytest, vitest,
+  jest, rspec, PHPUnit, Gradle, Maven, npm). Results appear as a grouped tree
+  with pass/fail counts and durations; a green ▶ in the gutter runs one test.
+- **LSP** — 24 servers pre-configured. When one is present, navigation becomes
+  type-aware and you gain rename, quick fixes, formatting, inlay hints,
+  signature help, and call/type hierarchy.
 
-### Built-in Chromium browser
+### Git, browser, diagrams and the AI console
 
-An Electron `<webview>` pane with a real address bar, back/forward/reload,
-history, per-page devtools, zoom, and responsive presets (fit / 1280 / 834 /
-390). If a page fails to load it offers to detect and start your project's dev
-server, then reloads the preview — so you can build UI and see it without
-leaving the IDE.
-
-### Git
-
-Branch picker, staged/unstaged change lists with per-file stage, unstage and
-discard, commit (with commit-all), full commit history, and a commit viewer with
-a file list and colourised unified diff. Fetch, pull, push and stash from the
-panel header; right-click any commit to revert, cherry-pick or reset onto it.
-**Blame** puts per-line authorship beside the editor — click a line to open the
-commit that introduced it. Working-tree changes open as a
-side-by-side or inline Monaco diff. File-tree entries carry `M`/`A`/`U`/`D`
-decorations and the status bar shows branch, ahead/behind and change counts.
-
-### AI console
-
-The right-hand panel runs a coding agent **in your project directory with full
-project access**, streaming its work as it goes.
-
-- Pick **Claude** or **Codex** — the app detects each CLI on `PATH` and shows
-  install hints when one is missing
-- Permission modes: auto-edit, plan-only, ask-first, full access
-- Streams assistant text (rendered as markdown), reasoning, and every tool call
-  with its input and result
-- **Every file the agent touches becomes a reviewable change card** with
-  `+`/`−` line counts, a one-click side-by-side diff in the editor, and a revert
-  button
-- Conversations continue across turns via the CLI's own session resume
-
-Under the hood:
-
-| Provider | Command |
-| --- | --- |
-| Claude | `claude -p --output-format stream-json --verbose --permission-mode <mode>` |
-| Codex | `codex exec --json --skip-git-repo-check -C <cwd>` |
-
-Changes are captured two ways so nothing is missed: edit tool events snapshot the
-file immediately before and after the write, and a `git status` diff before/after
-the run catches anything the agent changed by other means (a shell command, a
-script it ran).
-
-### Themes
-
-Ten complete themes — Nova Dark, Tokyo Night, Dracula, Nord, One Dark Pro,
-Monokai Pro, Gruvbox Dark, Midnight Ocean, GitHub Light and Solarized Light.
-Each drives the whole application: chrome, editor, terminal, Mermaid diagrams and
-markdown preview all change together. Three file-icon packs (Nova, Classic,
-Minimal) are switchable independently.
-
-### Terminal
-
-Multiple shells in the bottom panel, with command history, `cd` persistence
-between commands, and `⌃C` to interrupt.
+- **Git** — branch picker, per-file staging, commit, history, commit viewer with
+  colourised diffs, blame in the gutter, stash, revert, cherry-pick, reset.
+- **Browser** — a real Chromium pane with an address bar, devtools and
+  responsive presets. If a page fails to load it offers to start your dev server.
+- **Diagrams** — `.nova-diagram.json` files open in a canvas editor with ten
+  shapes, 50 icons, UML relationships and SVG/PNG export, or in a live Mermaid
+  source editor. Six starter templates.
+- **AI console** — Claude or Codex running in your project, streaming tool calls,
+  with every touched file becoming a reviewable change card with a diff and a
+  revert button.
+- **Local history** — every overwrite snapshotted independently of Git, including
+  the AI's. Browse, diff and restore any revision.
+- **Ten themes** driving the whole application, and three file-icon packs.
 
 ---
 
 ## Keyboard shortcuts
 
-| | |
-| --- | --- |
-| `⌘P` | Go to file |
-| `⇧⌘P` | Command palette |
-| `⇧⌘O` | Go to symbol in project |
-| `⌘`+click / `F12` | Go to definition |
-| `⌥F7` | Find usages |
-| `⇧F12` | Peek references |
-| `⇧F6` / `F2` | Rename symbol |
-| `⌥⏎` | Quick fixes |
-| `⌥⌘B` | Go to implementation |
-| `⌥⌘L` | Format document |
-| `⌃⌥H` / `⌃H` | Call / type hierarchy |
-| `F5` · `F10` · `F11` | Debug: start · step over · step into |
-| `⇧⌘F` | Search in project |
-| `⇧⌘G` | Source control |
-| `⌘S` / `⇧⌘S` | Save / save all |
-| `⌘B` | Toggle sidebar |
-| `⌘J` | Toggle bottom panel |
-| `⌘I` | Toggle AI console |
-| `⌃\`` | Terminal |
-| `⌘1…9` | Jump to tab |
+| | | | |
+|---|---|---|---|
+| `⌘P` Go to file | `⇧⌘P` Command palette | `⇧⌘O` Go to symbol | `⇧⌘F` Search in project |
+| `⌘`+click · `F12` Go to definition | `⌥F7` Find usages | `⇧F12` Peek references | `⌥⌘B` Go to implementation |
+| `⌃T` Refactor This | `⇧F6` · `F2` Rename | `⌥⏎` Quick fixes | `⌥⌘L` Format document |
+| `⌥⌘E` Explain this file | `⌃⌥H` Call hierarchy | `⌃H` Type hierarchy | `⇧⌘G` Source control |
+| `F5` Debug start | `F10` Step over | `F11` Step into | `⇧F5` Stop |
+| `⌘S` · `⇧⌘S` Save · save all | `⌘B` Toggle sidebar | `⌘J` Toggle panel | `⌘I` Toggle AI console |
+| `` ⌃` `` Terminal | `⌘1…9` Jump to tab | `⌘W` Close tab | |
 
-In the diagram canvas: drag empty space to pan, `⌘`/`Ctrl` + scroll to zoom,
-`⌥` while dragging to bypass grid snapping, `⌫` to delete, `⌘D` to duplicate.
+Refactoring bindings are listed in the [features table](#thirteen-refactorings-on-intellijs-keymap)
+above. In the diagram canvas: drag to pan, `⌘`+scroll to zoom, `⌥` to bypass grid
+snapping, `⌫` to delete, `⌘D` to duplicate.
 
 ---
 
 ## Architecture
 
+The renderer has no Node access: `contextIsolation` is on, `nodeIntegration` is
+off, and everything crosses a typed `window.nova` bridge. Guest pages in the
+browser pane are stripped of any preload and cannot reach it at all.
+
 ```
 electron/
-  main.ts            window, webview policy, IPC registration
-  preload.ts         the contextBridge API exposed as window.nova
-  ipc/
-    app.ts           dialogs, recents, persisted settings
-    fs.ts            listing, read/write, search, fuzzy find, watching
-    git.ts           porcelain parsing, log, diff, staging, commit
-    ai.ts            CLI spawning, stream parsing, change capture
-    shell.ts         terminal processes, dev-server detection
-    indexer.ts       IPC surface for the symbol index
-    lsp.ts           IPC surface for language servers
+  main.ts              window, webview policy, IPC registration
+  preload.ts           the contextBridge API exposed as window.nova
+  ipc/                 app · fs · git · ai · shell · indexer · lsp · debug · tests
   lib/
-    parseSymbols.ts  per-language declaration extraction
-    projectIndex.ts  the index engine: build, refresh, definitions, references
-    lspClient.ts     JSON-RPC 2.0 over Content-Length framed stdio
-    lspManager.ts    server lifecycle, document sync, request wrappers
-    lspRegistry.ts   the 24 known servers and how to detect them
-    dapClient.ts     Debug Adapter Protocol client
-    debugSession.ts  breakpoints, stepping, stack, variables, evaluate
-    debugRegistry.ts the known debug adapters
-    testFrameworks.ts test detection, command building and result parsing
-    localHistory.ts  per-file revision snapshots
-    runConfigs.ts    detected + custom run configurations
-tests/             offline suites + live-app suites driven over CDP
-shared/types.ts      the IPC contract, shared by both sides
+    parseSymbols.ts    per-language declaration extraction
+    projectIndex.ts    the index engine: build, refresh, definitions, references
+    lspClient.ts       JSON-RPC 2.0 over Content-Length framed stdio
+    lspManager.ts      server lifecycle, document sync, request wrappers
+    dapClient.ts       Debug Adapter Protocol client
+    debugSession.ts    breakpoints, stepping, stack, variables, evaluate
+    testFrameworks.ts  detection, command building, result parsing
+    localHistory.ts    per-file revision snapshots
+shared/types.ts        the IPC contract, shared by both sides
 src/
-  state/store.ts     Zustand store: tabs, buffers, git, AI messages, settings
-  theme/themes.ts    the ten themes + Monaco theme generation
-  components/        sidebar, editor, diagram, browser, ai, panel
+  lib/refactor/        the refactoring engine — pure, no DOM, fully testable
+  lib/explain.ts       the Explain prompt contract
+  state/store.ts       Zustand store: tabs, buffers, git, AI, settings
+  components/          sidebar · editor · diagram · browser · ai · panel
+tests/                 offline suites + live-app suites driven over CDP
 ```
 
-The renderer has no Node access: `contextIsolation` is on, `nodeIntegration` is
-off, and everything crosses through the typed `window.nova` bridge. Guest pages
-in the browser pane are stripped of any preload and cannot reach it at all.
+---
 
 ## Tests
 
-`npm test` builds the main-process modules and runs the suites:
+```bash
+npm test
+```
 
 | | |
-| --- | --- |
-| `npm run test:offline` | pure logic — declaration parsing, the symbol index, the edit applier, test-framework detection and parsing |
-| `npm run test:tools` | real tooling — clangd + rust-analyzer over LSP, debugpy over DAP, inlay hints and call hierarchy |
-| `npm run test:ui` | **98 UI checks** driving the running app with real clicks and keystrokes over CDP — see [`tests/FEATURES.md`](tests/FEATURES.md) |
-| `tests/verify-*.mjs` | focused live-app suites (AI console, browser pane, feature sweep) |
+|---|---|
+| `npm run test:offline` | pure logic — declaration parsing, the symbol index, the edit applier, test-framework detection, the **76-check refactoring suite** and the Explain prompt contract |
+| `npm run test:tools` | real tooling — clangd + rust-analyzer over LSP, debugpy over DAP, inlay hints, call hierarchy |
+| `npm run test:ui` | **117 UI checks** driving the running app with real clicks and keystrokes over CDP — see [tests/FEATURES.md](tests/FEATURES.md) |
 
-The live suites need the app running with a debug port:
+The UI suite asserts on rendered DOM after real input, not on store calls. It
+needs the app running with a debug port:
 
 ```bash
 NOVA_DEBUG_PORT=9223 npm run dev
@@ -315,8 +233,7 @@ NOVA_DEBUG_PORT=9223 npm run dev
 npm run test:ui
 ```
 
-`tests/restart-app.sh` restarts the app with the port free, which is needed
-after any main-process change.
+---
 
 ## Building a distributable
 
@@ -324,34 +241,15 @@ after any main-process change.
 npm run dist:mac
 ```
 
-## Troubleshooting
+Also `npm run dist` for the current platform. Output lands in `release/`.
 
-**`Electron failed to install correctly`** — npm 10.9+/11 blocks package install
-scripts by default, so Electron's binary is never downloaded. Approve it and
-reinstall:
+---
 
-```bash
-npm install-scripts approve electron
-```
+## Licence
 
-If the extraction still leaves `node_modules/electron/dist` incomplete (no
-`path.txt`), unzip the cached download by hand:
+Apache License 2.0 — see [LICENSE](LICENSE).
 
-```bash
-unzip -q ~/Library/Caches/electron/*/electron-v*-darwin-arm64.zip -d node_modules/electron/dist && printf 'Electron.app/Contents/MacOS/Electron' > node_modules/electron/path.txt
-```
-
-**AI console says the CLI was not found** — install the one you want and hit
-*Re-detect CLIs* in Settings:
-
-```bash
-npm install -g @anthropic-ai/claude-code
-```
-
-```bash
-npm install -g @openai/codex
-```
-
-GUI apps do not inherit a login shell `PATH`, so Nova also searches
-`~/.local/bin`, `~/.bun/bin`, `~/.cargo/bin`, `/opt/homebrew/bin` and
-`/usr/local/bin` when locating them.
+Nova bundles [Monaco](https://github.com/microsoft/monaco-editor) (MIT),
+[Mermaid](https://github.com/mermaid-js/mermaid) (MIT),
+[xterm.js](https://github.com/xtermjs/xterm.js) (MIT) and
+[Lucide](https://github.com/lucide-icons/lucide) (ISC).

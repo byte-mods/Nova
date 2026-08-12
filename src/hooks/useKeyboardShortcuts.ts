@@ -47,6 +47,19 @@ export function useKeyboardShortcuts() {
         else void window.nova.debug.stepIn()
         return
       }
+      // Explain This File.
+      if (mod && e.altKey && e.key.toLowerCase() === 'e') {
+        e.preventDefault()
+        const path = store.tabs.find((t) => t.id === store.activeTabId)?.path
+        if (path) void store.explainFile(path)
+        return
+      }
+      // Refactor This. Monaco binds it too; this covers the rest of the app.
+      if (e.ctrlKey && !e.metaKey && e.key.toLowerCase() === 't') {
+        e.preventDefault()
+        useStore.setState({ refactorMenuOpen: true })
+        return
+      }
       // IntelliJ's Find Usages; the editor binds it too, this covers other panes.
       if (e.altKey && e.key === 'F7') {
         e.preventDefault()

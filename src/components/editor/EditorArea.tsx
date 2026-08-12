@@ -7,6 +7,7 @@ import DiffView from './DiffView'
 import CommitView from './CommitView'
 import SettingsView from './SettingsView'
 import HistoryView from './HistoryView'
+import ExplainView from './ExplainView'
 import WelcomeView from './WelcomeView'
 import BrowserPane from '@/components/browser/BrowserPane'
 import DiagramEditor from '@/components/diagram/DiagramEditor'
@@ -58,6 +59,8 @@ function renderTab(tab: ReturnType<typeof useStore.getState>['tabs'][number]) {
       return <CommitView hash={tab.commitHash!} />
     case 'history':
       return <HistoryView path={tab.path!} />
+    case 'explain':
+      return <ExplainView path={tab.path!} />
     case 'settings':
       return <SettingsView />
     default:

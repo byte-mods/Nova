@@ -433,9 +433,12 @@ function useAiEvents() {
     const unsubscribe = window.nova.ai.onEvent((raw) => {
       const event = raw as AiEvent
       const store = useStore.getState()
+      // Events are buffered in the main process until `ai:ack`, by which point
+      // the message already carries its runId — so an unmatched event belongs to
+      // another consumer (an Explain run) and must not touch the conversation.
       const target = [...store.messages].reverse().find((m) => m.runId === event.runId)
-      if (!target && event.type !== 'session') return
-      const id = target?.id
+      if (!target) return
+      const id = target.id
 
       switch (event.type) {
         case 'session':

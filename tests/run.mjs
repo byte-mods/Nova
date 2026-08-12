@@ -21,9 +21,11 @@ const BUNDLES = [
   ['electron/lib/debugSession.ts', 'debugSession'],
   ['electron/lib/lspManager.ts', 'lspManager'],
   ['src/lib/applyEdits.ts', 'applyEdits'],
+  ['src/lib/refactor/index.ts', 'refactor'],
+  ['src/lib/explain.ts', 'explain'],
 ]
 
-const OFFLINE = ['test-parse', 'test-edits', 'test-frameworks', 'test-index']
+const OFFLINE = ['test-parse', 'test-edits', 'test-frameworks', 'test-index', 'test-refactor', 'test-explain']
 const TOOLS = ['test-lsp', 'test-hier', 'test-dap-py']
 
 const only = process.argv[2]

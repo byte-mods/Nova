@@ -134,10 +134,24 @@ async function reset() {
     const s = (await import('/src/state/store.ts')).useStore
     const st = s.getState()
     st.tabs.slice().forEach(t => st.closeTab(t.id))
+    // Settings persist across runs, so pin the ones the assertions depend on.
+    // With autoSave on, for instance, a tab is never observably dirty.
+    if (st.settings.autoSave || st.settings.formatOnSave) {
+      st.setSettings({ autoSave: false, formatOnSave: false })
+    }
     s.setState({
       panelVisible: false, usages: null, hierarchy: null, editPreview: null,
       paletteOpen: false, sidebarVisible: true, sidebarView: 'explorer',
+      refactorDialog: null, refactorMenuOpen: false, explain: {},
     })
+    return true
+  `)
+  // Breakpoints live in the main process for the app's lifetime, and a live
+  // session re-opens the paused file whenever it stops — both leak across
+  // sections and make later assertions depend on run order. Clear them.
+  await cdp.evaluate(`
+    await window.nova.debug.stop().catch(() => {})
+    await window.nova.debug.clearBreakpoints().catch(() => {})
     return true
   `)
   await cdp.sleep(400)
@@ -1651,9 +1665,365 @@ async function section16() {
   })
 }
 
+/* ================================================================== */
+/* 17. Refactoring                                                     */
+/* ================================================================== */
+
+/** Selects the first match of `needle` in the active editor. */
+async function selectInEditor(needle) {
+  return cdp.evaluate(`
+    const { monaco } = await import('/src/lib/monacoSetup.ts')
+    const ed = monaco.editor.getEditors()[0]
+    const hit = ed.getModel().findMatches(${JSON.stringify(needle)}, false, false, true, null, false)[0]
+    if (!hit) return false
+    ed.setSelection(hit.range); ed.revealRange(hit.range); ed.focus()
+    return true`)
+}
+
+/** Puts the caret on the first whole-word match of `needle`. */
+async function caretOn(needle) {
+  return cdp.evaluate(`
+    const { monaco } = await import('/src/lib/monacoSetup.ts')
+    const ed = monaco.editor.getEditors()[0]
+    const hit = ed.getModel().findMatches(${JSON.stringify(needle)}, false, false, true, ' \\t()[]{},:.', false)[0]
+    if (!hit) return false
+    ed.setPosition({ lineNumber: hit.range.startLineNumber, column: hit.range.startColumn + 1 })
+    ed.focus()
+    return true`)
+}
+
+async function runRefactorAction(id) {
+  await cdp.evaluate(`
+    const { monaco } = await import('/src/lib/monacoSetup.ts')
+    monaco.editor.getEditors()[0].trigger('suite', ${JSON.stringify(`nova.refactor.${id}`)}, null)`)
+  await cdp.sleep(1400)
+}
+
+/** Replaces the nth text input of the refactor dialog. */
+async function fillDialog(nth, value) {
+  const selector = '.refactor-dialog .refactor-fields input:not([type=checkbox])'
+  const point = await cdp.boxOf(selector, nth)
+  if (!point) return false
+  await cdp.clickPoint(point, { clickCount: 3 })
+  await cdp.sleep(120)
+  await cdp.type(value)
+  await cdp.sleep(150)
+  return true
+}
+
+const confirmDialog = () => cdp.click('.refactor-dialog .btn.primary', { settle: 1600 })
+const applyPreview = () => cdp.clickText('.refactor-modal .btn.primary', 'Apply', { settle: 2500 })
+
+async function section17() {
+  console.log('\n── 17. Refactoring ──')
+  await reset()
+  const ordersPath = path.join(PROJECT, 'src', 'orders.py')
+  const mainPath = path.join(PROJECT, 'src', 'main.py')
+  const ordersBefore = await fs.readFile(ordersPath, 'utf8')
+  const mainBefore = await fs.readFile(mainPath, 'utf8')
+
+  const restore = async () => {
+    await fs.writeFile(ordersPath, ordersBefore)
+    await fs.writeFile(mainPath, mainBefore)
+    await cdp.evaluate(`
+      const s=(await import('/src/state/store.ts')).useStore
+      const st=s.getState()
+      st.tabs.filter(t=>t.path && t.path.endsWith('.py')).forEach(t=>st.closeTab(t.id))
+      return true`)
+    await cdp.sleep(500)
+    await cdp.evaluate(`
+      const s=(await import('/src/state/store.ts')).useStore
+      await s.getState().openFile(${JSON.stringify(ordersPath)}); return true`)
+    await cdp.sleep(1000)
+  }
+
+  await restore()
+
+  await r.guard('17.1', 'Refactor This (⌃T) lists the available refactorings', async () => {
+    await selectInEditor('{"id": "1", "total": total}')
+    await cdp.key('t', ['ctrl'])
+    await cdp.sleep(700)
+    const items = await cdp.evaluate(
+      `return [...document.querySelectorAll('.refactor-menu .modal-item')].map(e=>e.textContent)`,
+    )
+    await cdp.key('Escape')
+    return { ok: items.length >= 14, detail: `entries=${items.length}` }
+  })
+
+  await r.guard('17.2', 'entries needing a selection are disabled without one', async () => {
+    await cdp.evaluate(`
+      const { monaco } = await import('/src/lib/monacoSetup.ts')
+      const ed = monaco.editor.getEditors()[0]
+      ed.setPosition({ lineNumber: 1, column: 1 }); ed.focus(); return true`)
+    await cdp.key('t', ['ctrl'])
+    await cdp.sleep(600)
+    const disabled = await cdp.evaluate(
+      `return [...document.querySelectorAll('.refactor-menu .modal-item')].filter(e=>e.disabled).length`,
+    )
+    await cdp.key('Escape')
+    return { ok: disabled === 5, detail: `disabled=${disabled}` }
+  })
+
+  await r.guard('17.3', 'Extract Variable rewrites the statement', async () => {
+    await restore()
+    await selectInEditor('self.repo.save(order)')
+    await runRefactorAction('extract.variable')
+    if (!(await exists('.refactor-dialog'))) return { ok: false, detail: 'no dialog' }
+    await fillDialog(0, 'saved')
+    await confirmDialog()
+    const previewed = await exists('.refactor-modal')
+    await applyPreview()
+    const after = await fs.readFile(ordersPath, 'utf8')
+    return {
+      ok: previewed && after.includes('saved = self.repo.save(order)') && !/^\s+saved\s*$/m.test(after),
+      detail: `preview=${previewed}`,
+    }
+  })
+
+  await r.guard('17.4', 'Extract Method moves the body and calls it', async () => {
+    await restore()
+    await cdp.evaluate(`
+      const { monaco } = await import('/src/lib/monacoSetup.ts')
+      const ed = monaco.editor.getEditors()[0]
+      const model = ed.getModel()
+      let from = -1, to = -1
+      for (let l = 1; l <= model.getLineCount(); l++) {
+        const t = model.getLineContent(l)
+        if (t.includes('order = {')) from = l
+        if (t.includes('self.repo.save(order)')) to = l
+      }
+      ed.setSelection(new monaco.Range(from, 1, to, model.getLineMaxColumn(to)))
+      ed.focus(); return true`)
+    await runRefactorAction('extract.method')
+    if (!(await exists('.refactor-dialog'))) return { ok: false, detail: 'no dialog' }
+    await fillDialog(0, 'build_order')
+    await confirmDialog()
+    await applyPreview()
+    const after = await fs.readFile(ordersPath, 'utf8')
+    return {
+      ok: after.includes('def build_order(self, total):') && after.includes('self.build_order(total)'),
+      detail: after.split('\n').slice(9, 13).join(' | '),
+    }
+  })
+
+  await r.guard('17.5', 'Extract Constant hoists to file scope', async () => {
+    await restore()
+    await selectInEditor('50')
+    await runRefactorAction('extract.constant')
+    if (!(await exists('.refactor-dialog'))) return { ok: false, detail: 'no dialog' }
+    await fillDialog(0, 'DEFAULT_TOTAL')
+    await confirmDialog()
+    await applyPreview()
+    const after = await fs.readFile(ordersPath, 'utf8')
+    return {
+      ok: /^DEFAULT_TOTAL = 50/m.test(after) && after.includes('MAX_ITEMS = DEFAULT_TOTAL'),
+      detail: after.split('\n')[0],
+    }
+  })
+
+  await r.guard('17.6', 'Change Signature hides `self` and rewrites call sites', async () => {
+    await restore()
+    await caretOn('create_order')
+    await runRefactorAction('signature.change')
+    if (!(await exists('.refactor-dialog'))) return { ok: false, detail: 'no dialog' }
+    const rows = await cdp.evaluate(
+      `return [...document.querySelectorAll('.param-table .param-row:not(.param-head)')].map(r => r.querySelector('input').value)`,
+    )
+    if (rows.join(',') !== 'total') return { ok: false, detail: `rows=${rows.join(',')}` }
+    await cdp.clickText('.refactor-dialog .btn', 'Add parameter', { settle: 500 })
+    const inputs = await count('.refactor-dialog .refactor-fields input:not([type=checkbox])')
+    await fillDialog(inputs - 4, 'currency')
+    await fillDialog(inputs - 1, '"gbp"')
+    await confirmDialog()
+    const files = await count('.refactor-files .tree-row')
+    await applyPreview()
+    const orders = await fs.readFile(ordersPath, 'utf8')
+    const main = await fs.readFile(mainPath, 'utf8')
+    return {
+      ok:
+        files >= 2 &&
+        orders.includes('def create_order(self, total, currency):') &&
+        main.includes('create_order(42, "gbp")'),
+      detail: `files=${files}`,
+    }
+  })
+
+  await r.guard('17.7', 'Safe Delete refuses while references remain', async () => {
+    await restore()
+    await caretOn('build_service')
+    await runRefactorAction('safeDelete')
+    if (!(await exists('.refactor-dialog'))) return { ok: false, detail: 'no dialog' }
+    const notes = await cdp.evaluate(
+      `return [...document.querySelectorAll('.refactor-dialog .refactor-note')].map(e=>e.textContent).join(' | ')`,
+    )
+    await confirmDialog()
+    await cdp.sleep(1200)
+    const unchanged = (await fs.readFile(ordersPath, 'utf8')).includes('def build_service')
+    const usages = await cdp.evaluate(`return document.querySelector('.usages-header')?.innerText ?? ''`)
+    return {
+      ok: notes.includes('would break') && unchanged && usages.includes('build_service'),
+      detail: notes.slice(0, 90),
+    }
+  })
+
+  await r.guard('17.8', 'Move File renames and recomputes imports', async () => {
+    const dir = path.join(PROJECT, 'ts')
+    await fs.mkdir(path.join(dir, 'app'), { recursive: true })
+    await fs.writeFile(path.join(dir, 'util.ts'), 'export const helper = 1\n')
+    await fs.writeFile(path.join(dir, 'app', 'main.ts'), "import { helper } from '../util'\nconsole.log(helper)\n")
+    await cdp.evaluate(`
+      const s=(await import('/src/state/store.ts')).useStore
+      await s.getState().buildIndex()
+      await s.getState().openFile(${JSON.stringify(path.join(dir, 'util.ts'))}); return true`)
+    await cdp.sleep(2500)
+
+    await runRefactorAction('move.file')
+    if (!(await exists('.refactor-dialog'))) return { ok: false, detail: 'no dialog' }
+    await fillDialog(0, path.join(dir, 'lib'))
+    await confirmDialog()
+    const ops = await cdp.evaluate(`return document.querySelector('.refactor-ops')?.textContent ?? ''`)
+    await applyPreview()
+
+    const moved = await fs.readFile(path.join(dir, 'lib', 'util.ts'), 'utf8').then(() => true).catch(() => false)
+    const importer = await fs.readFile(path.join(dir, 'app', 'main.ts'), 'utf8')
+    await fs.rm(dir, { recursive: true, force: true })
+    return {
+      ok: ops.includes('rename') && moved && importer.includes("'../lib/util'"),
+      detail: `moved=${moved} import=${importer.split('\n')[0]}`,
+    }
+  })
+
+  await restore()
+}
+
+/* ================================================================== */
+/* 18. Explain (AI walkthrough)                                        */
+/* ================================================================== */
+
+async function section18() {
+  console.log('\n── 18. Explain ──')
+  await reset()
+  const target = path.join(PROJECT, 'src', 'main.py')
+  const saved = path.join(PROJECT, 'src', 'main-py.explained.md')
+  await fs.rm(saved, { force: true })
+  // Section 13 leaves a conversation behind, so the assertion is that Explain
+  // adds nothing to it — not that it is empty.
+  const messagesBefore = await cdp.evaluate(
+    `const s=(await import('/src/state/store.ts')).useStore.getState(); return s.messages.length`,
+  )
+
+  await cdp.evaluate(`
+    const s=(await import('/src/state/store.ts')).useStore
+    s.setState({ explain: {} })
+    await s.getState().openFile(${JSON.stringify(target)})
+    return true`)
+  await cdp.sleep(1200)
+
+  await r.guard('18.1', 'Explain button is offered for a source file', async () => {
+    const button = await cdp.evaluate(`
+      const b = document.querySelector('.tab-action')
+      return b ? { text: b.textContent.trim(), disabled: b.disabled } : null`)
+    return { ok: Boolean(button) && button.text === 'Explain' && !button.disabled, detail: JSON.stringify(button) }
+  })
+
+  await r.guard('18.2', 'the button is disabled where there is nothing to explain', async () => {
+    await cdp.evaluate(`
+      const s=(await import('/src/state/store.ts')).useStore
+      s.getState().openTab({ id: 'settings', kind: 'settings', title: 'Settings' }); return true`)
+    await cdp.sleep(500)
+    const disabled = await cdp.evaluate(`return document.querySelector('.tab-action')?.disabled === true`)
+    await cdp.evaluate(`
+      const s=(await import('/src/state/store.ts')).useStore
+      s.getState().setActiveTab('file:' + ${JSON.stringify(target)}); return true`)
+    await cdp.sleep(500)
+    return { ok: disabled, detail: `disabled=${disabled}` }
+  })
+
+  await r.guard('18.3', 'clicking it opens a walkthrough tab and starts a run', async () => {
+    const clicked = await cdp.click('.tab-action', { settle: 1500 })
+    const state = await cdp.evaluate(`
+      const s=(await import('/src/state/store.ts')).useStore.getState()
+      return {
+        tab: s.tabs.some(t => t.kind === 'explain'),
+        status: Object.values(s.explain)[0]?.status,
+        waiting: Boolean(document.querySelector('.explain-waiting')),
+      }`)
+    return { ok: clicked && state.tab && state.status === 'running', detail: JSON.stringify(state) }
+  })
+
+  const finished = await cdp
+    .waitFor(
+      `(async () => { const s=(await import('/src/state/store.ts')).useStore.getState(); return Object.values(s.explain)[0]?.status !== 'running' })()`,
+      { timeout: 420000, interval: 3000, label: 'walkthrough' },
+    )
+    .then(() => true)
+    .catch(() => false)
+
+  await r.guard('18.4', 'the document streams to completion', async () => {
+    const doc = await cdp.evaluate(
+      `const s=(await import('/src/state/store.ts')).useStore.getState(); const d=Object.values(s.explain)[0]; return { status: d?.status, chars: d?.content.length ?? 0, error: d?.error }`,
+    )
+    return { ok: finished && doc.status === 'done' && doc.chars > 1500, detail: JSON.stringify(doc) }
+  })
+
+  await r.guard('18.5', 'it renders sections, tables and live Mermaid diagrams', async () => {
+    await cdp.sleep(2500)
+    const rendered = await cdp.evaluate(`
+      const body = document.querySelector('.explain-body')
+      if (!body) return null
+      return {
+        headings: body.querySelectorAll('h1, h2').length,
+        svgs: body.querySelectorAll('svg').length,
+        tables: body.querySelectorAll('table').length,
+        code: body.querySelectorAll('pre').length,
+        startsAtHeading: /^[A-Za-z0-9]/.test(body.textContent.trim()) && !/^(I['’]|Sure|Here|Let me)/.test(body.textContent.trim()),
+      }`)
+    return {
+      ok:
+        rendered &&
+        rendered.headings >= 6 &&
+        rendered.svgs >= 1 &&
+        rendered.code >= 1 &&
+        rendered.startsAtHeading,
+      detail: JSON.stringify(rendered),
+    }
+  })
+
+  await r.guard('18.6', 'Save as Markdown writes the document to the project', async () => {
+    // Assert against the view under test, whatever else grabbed focus.
+    await cdp.evaluate(`
+      const s=(await import('/src/state/store.ts')).useStore
+      const tab = s.getState().tabs.find(t => t.kind === 'explain')
+      if (tab) s.getState().setActiveTab(tab.id)
+      return true`)
+    await cdp.sleep(600)
+    const clicked = await cdp.clickText('.explain-toolbar .btn', 'Save as Markdown', { settle: 2500 })
+    const content = await fs.readFile(saved, 'utf8').catch(() => '')
+    await fs.rm(saved, { force: true })
+    return {
+      ok: clicked && content.trimStart().startsWith('#') && content.length > 1000,
+      detail: `clicked=${clicked} chars=${content.length}`,
+    }
+  })
+
+  await r.guard('18.7', 'the run is read-only and leaves the conversation alone', async () => {
+    const source = await fs.readFile(target, 'utf8')
+    const console_ = await cdp.evaluate(`
+      const s=(await import('/src/state/store.ts')).useStore.getState()
+      return { messages: s.messages.length, running: s.aiRunning }`)
+    return {
+      ok:
+        source.includes('from orders import') &&
+        console_.messages === messagesBefore &&
+        !console_.running,
+      detail: `${JSON.stringify(console_)} before=${messagesBefore}`,
+    }
+  })
+}
+
 /* ------------------------------------------------------------------ */
 
-const SECTIONS = { 1: section1, 2: section2, 3: section3, 4: section4, 5: section5, 6: section6, 7: section7, 8: section8, 9: section9, 10: section10, 11: section11, 12: section12, 13: section13, 14: section14, 15: section15, 16: section16 }
+const SECTIONS = { 1: section1, 2: section2, 3: section3, 4: section4, 5: section5, 6: section6, 7: section7, 8: section8, 9: section9, 10: section10, 11: section11, 12: section12, 13: section13, 14: section14, 15: section15, 16: section16, 17: section17, 18: section18 }
 
 await buildFixture()
 await openProject()

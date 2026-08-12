@@ -19,7 +19,7 @@ import { applyTheme, defaultThemeId, getTheme } from '@/theme/themes'
 import { basename } from '@/lib/paths'
 import { lspDidChange, lspDidClose, lspDidOpen, lspDidSave, lspResetDocuments } from '@/lib/lspSync'
 
-export type TabKind = 'file' | 'diff' | 'diagram' | 'browser' | 'settings' | 'commit' | 'history'
+export type TabKind = 'file' | 'diff' | 'diagram' | 'browser' | 'settings' | 'commit' | 'history' | 'explain'
 
 export interface DiffPayload {
   before: string
@@ -39,6 +39,20 @@ export interface Tab {
   url?: string
   commitHash?: string
   preview?: boolean
+}
+
+/** A generated walkthrough of one file, streamed in from the AI CLI. */
+export interface ExplainDoc {
+  path: string
+  runId?: string
+  provider: AiProvider
+  depth: import('@/lib/explain').ExplainDepth
+  content: string
+  thinking: string
+  status: 'running' | 'done' | 'error'
+  error?: string
+  startedAt: number
+  finishedAt?: number
 }
 
 export interface Buffer {
@@ -226,6 +240,12 @@ interface State {
   paletteOpen: boolean
   paletteMode: PaletteMode
   editPreview: import('@/lib/editPreview').EditPreview | null
+  /** Parameter dialog for the refactoring under way, if any. */
+  refactorDialog: import('@/lib/refactor/bridge').RefactorDialogState | null
+  /** The ⌃T "Refactor This" popup. */
+  refactorMenuOpen: boolean
+  /** Generated walkthroughs, keyed by the file they describe. */
+  explain: Record<string, ExplainDoc>
   toast: { text: string; tone: 'info' | 'error' | 'success' } | null
 
   init: () => Promise<void>
@@ -296,6 +316,10 @@ interface State {
   clearConversation: () => void
 
   setPalette: (open: boolean, mode?: PaletteMode) => void
+
+  explainFile: (path: string, depth?: import('@/lib/explain').ExplainDepth) => Promise<void>
+  stopExplain: (path: string) => Promise<void>
+  patchExplain: (runId: string, patch: (doc: ExplainDoc) => ExplainDoc) => void
   notify: (text: string, tone?: 'info' | 'error' | 'success') => void
 }
 
@@ -342,6 +366,9 @@ export const useStore = create<State>((set, get) => ({
   paletteOpen: false,
   paletteMode: 'command',
   editPreview: null,
+  refactorDialog: null,
+  refactorMenuOpen: false,
+  explain: {},
   toast: null,
 
   async init() {
@@ -940,6 +967,107 @@ export const useStore = create<State>((set, get) => ({
 
   setPalette(open, mode) {
     set({ paletteOpen: open, paletteMode: mode ?? get().paletteMode })
+  },
+
+  /**
+   * Starts a read-only agent run that documents `path`, and opens a tab that
+   * renders the answer as it streams.
+   *
+   * The run is deliberately not part of the AI console conversation: it gets no
+   * `resumeSessionId`, so a walkthrough never inherits — or pollutes — whatever
+   * the user was discussing in the panel.
+   */
+  async explainFile(path, depth = 'system') {
+    const { root, settings, providers } = get()
+    if (!root) return
+    const provider = providers.find((p) => p.id === settings.aiProvider)
+    if (provider && !provider.available) {
+      get().notify(`${provider.label} is not installed — ${provider.hint}`, 'error')
+      return
+    }
+
+    const previous = get().explain[path]
+    if (previous?.status === 'running' && previous.runId) {
+      await nova().ai.cancel(previous.runId)
+    }
+
+    const tabId = `explain:${path}`
+    get().openTab({
+      id: tabId,
+      kind: 'explain',
+      title: `${basename(path)} — explained`,
+      path,
+      subtitle: `Generated walkthrough of ${path}`,
+    })
+
+    set({
+      explain: {
+        ...get().explain,
+        [path]: {
+          path,
+          provider: settings.aiProvider,
+          depth,
+          content: '',
+          thinking: '',
+          status: 'running',
+          startedAt: Date.now(),
+        },
+      },
+    })
+
+    try {
+      const { buildExplainPrompt } = await import('@/lib/explain')
+      const { languageForPath } = await import('@/lib/language')
+      const { runId } = await nova().ai.start({
+        provider: settings.aiProvider,
+        prompt: buildExplainPrompt({
+          relativePath: path.startsWith(root) ? path.slice(root.length + 1) : path,
+          language: languageForPath(path),
+          depth,
+        }),
+        cwd: root,
+        model: settings.aiModel || undefined,
+        attachments: [path],
+        // Read-only: a walkthrough must never rewrite the thing it describes.
+        permissionMode: 'plan',
+      })
+      set({
+        explain: { ...get().explain, [path]: { ...get().explain[path], runId } },
+      })
+      await nova().ai.ack(runId)
+    } catch (error) {
+      set({
+        explain: {
+          ...get().explain,
+          [path]: {
+            ...get().explain[path],
+            status: 'error',
+            error: (error as Error).message,
+            finishedAt: Date.now(),
+          },
+        },
+      })
+    }
+  },
+
+  async stopExplain(path) {
+    const doc = get().explain[path]
+    if (!doc?.runId) return
+    await nova().ai.cancel(doc.runId)
+    set({
+      explain: {
+        ...get().explain,
+        [path]: { ...doc, status: 'done', finishedAt: Date.now() },
+      },
+    })
+  },
+
+  patchExplain(runId, patch) {
+    const entries = Object.entries(get().explain)
+    const found = entries.find(([, doc]) => doc.runId === runId)
+    if (!found) return
+    const [path, doc] = found
+    set({ explain: { ...get().explain, [path]: patch(doc) } })
   },
 
   notify(text, tone = 'info') {

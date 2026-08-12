@@ -200,18 +200,24 @@ export function registerFsHandlers(ctx: Ctx) {
     },
   )
 
-  ipcMain.handle('fs:findFiles', async (_e, root: string, query: string): Promise<string[]> => {
-    const needle = query.toLowerCase().replace(/\s+/g, '')
-    const scored: { file: string; score: number }[] = []
-    for await (const file of walk(root, 30000)) {
-      const rel = path.relative(root, file)
-      const score = needle ? fuzzyScore(rel.toLowerCase(), needle) : 1
-      if (score > 0) scored.push({ file, score })
-      if (scored.length > 4000) break
-    }
-    scored.sort((a, b) => b.score - a.score || a.file.length - b.file.length)
-    return scored.slice(0, 60).map((s) => s.file)
-  })
+  // `limit` exists for the refactoring engine, which needs the whole tree to
+  // recompute import paths, not just the palette's top matches.
+  ipcMain.handle(
+    'fs:findFiles',
+    async (_e, root: string, query: string, limit = 60): Promise<string[]> => {
+      const needle = query.toLowerCase().replace(/\s+/g, '')
+      const cap = Math.max(1, Math.min(limit, 30000))
+      const scored: { file: string; score: number }[] = []
+      for await (const file of walk(root, 30000)) {
+        const rel = path.relative(root, file)
+        const score = needle ? fuzzyScore(rel.toLowerCase(), needle) : 1
+        if (score > 0) scored.push({ file, score })
+        if (scored.length > Math.max(4000, cap)) break
+      }
+      scored.sort((a, b) => b.score - a.score || a.file.length - b.file.length)
+      return scored.slice(0, cap).map((s) => s.file)
+    },
+  )
 
   const watchers = new Map<string, fsSync.FSWatcher>()
   ipcMain.handle('fs:watch', async (_e, root: string) => {

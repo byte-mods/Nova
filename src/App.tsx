@@ -10,9 +10,12 @@ import StatusBar from '@/components/StatusBar'
 import CommandPalette from '@/components/CommandPalette'
 import Toast from '@/components/Toast'
 import RefactorPreview from '@/components/RefactorPreview'
+import RefactorDialog from '@/components/RefactorDialog'
+import RefactorMenu from '@/components/RefactorMenu'
 import Splitter from '@/components/Splitter'
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts'
 import { useWatchers } from '@/hooks/useWatchers'
+import { useExplainEvents } from '@/hooks/useExplainEvents'
 
 export default function App() {
   const ready = useStore((s) => s.ready)
@@ -29,6 +32,7 @@ export default function App() {
 
   useKeyboardShortcuts()
   useWatchers()
+  useExplainEvents()
 
   if (!ready) {
     return (
@@ -86,6 +90,8 @@ export default function App() {
       </div>
       <StatusBar />
       <CommandPalette />
+      <RefactorMenu />
+      <RefactorDialog />
       <RefactorPreview />
       <Toast />
     </div>

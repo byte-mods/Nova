@@ -1,6 +1,17 @@
-import { GitCommitHorizontal, Globe, History, Settings, Shapes, SplitSquareHorizontal, X } from 'lucide-react'
+import {
+  BookOpen,
+  GitCommitHorizontal,
+  Globe,
+  History,
+  Loader2,
+  Settings,
+  Shapes,
+  SplitSquareHorizontal,
+  X,
+} from 'lucide-react'
 import { useStore, type Tab } from '@/state/store'
 import { fileIcon } from '@/lib/fileIcons'
+import { isImage } from '@/lib/language'
 
 export default function TabBar() {
   const tabs = useStore((s) => s.tabs)
@@ -46,7 +57,63 @@ export default function TabBar() {
           </div>
         )
       })}
+      <ExplainButton />
     </div>
+  )
+}
+
+/**
+ * "Explain this" — generates a walkthrough of whatever code is open.
+ *
+ * It sits at the end of the tab strip rather than in a toolbar of its own so
+ * that it is visible above every kind of file without adding a row of chrome
+ * that most files do not need.
+ */
+function ExplainButton() {
+  const tabs = useStore((s) => s.tabs)
+  const activeTabId = useStore((s) => s.activeTabId)
+  const explain = useStore((s) => s.explain)
+
+  const active = tabs.find((t) => t.id === activeTabId)
+  const path = active?.path
+  // Only real, readable source: not diffs, browsers, images or the walkthrough
+  // itself (explaining a generated document would be circular).
+  const target =
+    path && (active.kind === 'file' || active.kind === 'diagram') && !isImage(path) ? path : null
+
+  const running = target ? explain[target]?.status === 'running' : false
+  const existing = target ? Boolean(explain[target]) : false
+
+  return (
+    <button
+      className={`tab-action ${running ? 'busy' : ''}`}
+      disabled={!target}
+      title={
+        target
+          ? existing
+            ? 'Open the generated walkthrough for this file'
+            : 'Generate documentation, diagrams and a tutorial for this file'
+          : 'Open a source file to explain it'
+      }
+      onClick={() => {
+        if (!target) return
+        const store = useStore.getState()
+        // Already generated: just bring the tab forward rather than re-running.
+        if (store.explain[target]) {
+          store.openTab({
+            id: `explain:${target}`,
+            kind: 'explain',
+            title: `${target.split('/').pop()} — explained`,
+            path: target,
+          })
+          return
+        }
+        void store.explainFile(target)
+      }}
+    >
+      {running ? <Loader2 size={12} className="spin" /> : <BookOpen size={12} />}
+      <span>Explain</span>
+    </button>
   )
 }
 

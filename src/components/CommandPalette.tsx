@@ -7,6 +7,8 @@ import { fileIcon } from '@/lib/fileIcons'
 import { symbolGlyph } from '@/lib/symbolGlyph'
 import { themes } from '@/theme/themes'
 import { newDiagramTab } from '@/components/diagram/diagramFile'
+import { REFACTORINGS } from '@/lib/refactor'
+import { currentSite, runRefactoring } from '@/lib/refactor/bridge'
 
 interface Command {
   id: string
@@ -121,6 +123,38 @@ export default function CommandPalette() {
         label: `Editor: Turn Minimap ${settings.minimap ? 'Off' : 'On'}`,
         run: () => store.setSettings({ minimap: !settings.minimap }),
       },
+      {
+        id: 'explain-file',
+        label: 'AI: Explain This File — docs, diagrams and a tutorial',
+        hint: '⌥⌘E',
+        run: () => {
+          const path = store.tabs.find((t) => t.id === store.activeTabId)?.path
+          if (!path) {
+            store.notify('Open a source file first.', 'error')
+            return
+          }
+          void store.explainFile(path)
+        },
+      },
+      {
+        id: 'refactor-this',
+        label: 'Refactor: Refactor This…',
+        hint: '⌃T',
+        run: () => useStore.setState({ refactorMenuOpen: true }),
+      },
+      ...REFACTORINGS.map((descriptor) => ({
+        id: `refactor:${descriptor.id}`,
+        label: `Refactor: ${descriptor.label}`,
+        hint: descriptor.shortcut,
+        run: () => {
+          const site = currentSite()
+          if (!site) {
+            store.notify('Open a file to refactor.', 'error')
+            return
+          }
+          void runRefactoring(descriptor.id, site)
+        },
+      })),
       ...themes.map((theme) => ({
         id: `theme:${theme.id}`,
         label: `Theme: ${theme.name}`,

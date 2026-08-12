@@ -5,6 +5,8 @@ import { useStore } from '@/state/store'
 import { languageForPath } from '@/lib/language'
 import { monaco } from '@/lib/monacoSetup'
 import { registerCodeIntelligence, wordAt } from '@/lib/monacoProviders'
+import { REFACTORINGS } from '@/lib/refactor'
+import { clearActiveEditor, runRefactoring, setActiveEditor, siteFromEditor } from '@/lib/refactor/bridge'
 import BlameGutter from './BlameGutter'
 
 export default function CodeEditor({ path }: { path: string }) {
@@ -171,7 +173,58 @@ export default function CodeEditor({ path }: { path: string }) {
       contextMenuOrder: 1.3,
       run: (ed) => ed.trigger('nova', 'editor.action.formatDocument', null),
     })
+
+    /* ---- refactorings ---- */
+
+    // Keep the bridge pointed at whichever editor the user last touched, so
+    // the palette and ⌃T still know where to act after focus moves away.
+    setActiveEditor(editor, path)
+    editor.onDidFocusEditorText(() => setActiveEditor(editor, path))
+
+    editor.addAction({
+      id: 'nova.refactorThis',
+      label: 'Refactor This…',
+      keybindings: [monacoApi.KeyMod.WinCtrl | monacoApi.KeyCode.KeyT],
+      contextMenuGroupId: '1_modification',
+      contextMenuOrder: 1.05,
+      run: (ed) => {
+        setActiveEditor(ed, path)
+        useStore.setState({ refactorMenuOpen: true })
+      },
+    })
+
+    // IntelliJ's default keymap, one action per refactoring.
+    const BINDINGS: Partial<Record<(typeof REFACTORINGS)[number]['id'], number>> = {
+      'extract.variable': monacoApi.KeyMod.CtrlCmd | monacoApi.KeyMod.Alt | monacoApi.KeyCode.KeyV,
+      'extract.constant': monacoApi.KeyMod.CtrlCmd | monacoApi.KeyMod.Alt | monacoApi.KeyCode.KeyC,
+      'extract.field': monacoApi.KeyMod.CtrlCmd | monacoApi.KeyMod.Alt | monacoApi.KeyCode.KeyF,
+      'extract.method': monacoApi.KeyMod.CtrlCmd | monacoApi.KeyMod.Alt | monacoApi.KeyCode.KeyM,
+      'extract.parameter': monacoApi.KeyMod.CtrlCmd | monacoApi.KeyMod.Alt | monacoApi.KeyCode.KeyP,
+      'inline.variable': monacoApi.KeyMod.CtrlCmd | monacoApi.KeyMod.Alt | monacoApi.KeyCode.KeyN,
+      'signature.change': monacoApi.KeyMod.CtrlCmd | monacoApi.KeyCode.F6,
+      'move.file': monacoApi.KeyCode.F6,
+      safeDelete: monacoApi.KeyMod.CtrlCmd | monacoApi.KeyCode.Backspace,
+    }
+
+    let order = 2
+    for (const descriptor of REFACTORINGS) {
+      const keybinding = BINDINGS[descriptor.id]
+      editor.addAction({
+        id: `nova.refactor.${descriptor.id}`,
+        label: `Refactor: ${descriptor.label}`,
+        keybindings: keybinding ? [keybinding] : undefined,
+        contextMenuGroupId: '1_modification',
+        contextMenuOrder: 2 + order++ / 100,
+        run: (ed) => {
+          setActiveEditor(ed, path)
+          const site = siteFromEditor(ed, path)
+          if (site) void runRefactoring(descriptor.id, site)
+        },
+      })
+    }
   }
+
+  useEffect(() => () => clearActiveEditor(path), [path])
 
   // Gutter run buttons next to each test declaration.
   useEffect(() => {

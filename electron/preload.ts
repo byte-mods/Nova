@@ -61,8 +61,8 @@ const api = {
     realpath: (target: string): Promise<string> => ipcRenderer.invoke('fs:realpath', target),
     search: (root: string, query: string, opts?: unknown): Promise<SearchHit[]> =>
       ipcRenderer.invoke('fs:search', root, query, opts),
-    findFiles: (root: string, query: string): Promise<string[]> =>
-      ipcRenderer.invoke('fs:findFiles', root, query),
+    findFiles: (root: string, query: string, limit?: number): Promise<string[]> =>
+      ipcRenderer.invoke('fs:findFiles', root, query, limit),
     watch: (root: string): Promise<void> => ipcRenderer.invoke('fs:watch', root),
     history: (file: string): Promise<HistoryRevision[]> => ipcRenderer.invoke('history:list', file),
     historyRead: (file: string, id: string): Promise<string> =>
