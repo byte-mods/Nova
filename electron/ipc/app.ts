@@ -3,6 +3,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import type { RecentProject } from '../../shared/types'
+import { buildProjectModel } from '../lib/projectModel'
 
 interface Ctx {
   broadcast: (channel: string, payload: unknown) => void
@@ -36,6 +37,19 @@ export function registerAppHandlers(ctx: Ctx) {
     return result.filePaths[0]
   })
 
+  ipcMain.handle(
+    'app:openFileDialog',
+    async (_e, options?: { filters?: { name: string; extensions: string[] }[] }) => {
+      const win = ctx.getWindow()
+      const config = { properties: ['openFile' as const], filters: options?.filters }
+      const result = win
+        ? await dialog.showOpenDialog(win, config)
+        : await dialog.showOpenDialog(config)
+      if (result.canceled || result.filePaths.length === 0) return null
+      return result.filePaths[0]
+    },
+  )
+
   ipcMain.handle('app:recents', () => readJson<RecentProject[]>(storeFile('recents.json'), []))
 
   ipcMain.handle('app:addRecent', async (_e, projectPath: string) => {
@@ -50,6 +64,9 @@ export function registerAppHandlers(ctx: Ctx) {
   })
 
   ipcMain.handle('app:homeDir', () => os.homedir())
+
+  // Modules, SDKs and frameworks, detected from manifests already on disk.
+  ipcMain.handle('app:projectModel', (_e, root: string) => buildProjectModel(root))
 
   ipcMain.handle('app:readSettings', () => readJson<unknown>(storeFile('settings.json'), null))
 

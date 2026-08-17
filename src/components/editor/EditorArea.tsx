@@ -9,7 +9,16 @@ import SettingsView from './SettingsView'
 import HistoryView from './HistoryView'
 import WelcomeView from './WelcomeView'
 import ExplainView from './ExplainView'
+import TutorialView from './TutorialView'
+import HttpView from './HttpView'
+import DatabaseView from './DatabaseView'
 import ExternalChangeBar from './ExternalChangeBar'
+import MergeView from './MergeView'
+import LineHistoryView from './LineHistoryView'
+import ScratchView from './ScratchView'
+import InspectResultsView from './InspectResultsView'
+import RunConfigsView from './RunConfigsView'
+import ProjectModelView from './ProjectModelView'
 import BrowserPane from '@/components/browser/BrowserPane'
 import DiagramEditor from '@/components/diagram/DiagramEditor'
 import { isImage, isMarkdown } from '@/lib/language'
@@ -94,6 +103,24 @@ function renderTab(tab: ReturnType<typeof useStore.getState>['tabs'][number]) {
       return <HistoryView path={tab.path!} />
     case 'explain':
       return <ExplainView path={tab.path!} />
+    case 'tutorial':
+      return <TutorialView />
+    case 'http':
+      return <HttpView path={tab.path!} />
+    case 'database':
+      return <DatabaseView />
+    case 'merge':
+      return <MergeView tab={tab} />
+    case 'linehistory':
+      return <LineHistoryView tab={tab} />
+    case 'scratch':
+      return <ScratchView tab={tab} />
+    case 'inspect':
+      return <InspectResultsView />
+    case 'runconfigs':
+      return <RunConfigsView />
+    case 'projectmodel':
+      return <ProjectModelView />
     case 'settings':
       return <SettingsView />
     default:

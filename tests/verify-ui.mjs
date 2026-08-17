@@ -195,6 +195,17 @@ const count = (selector) =>
   cdp.evaluate(`return document.querySelectorAll(${JSON.stringify(selector)}).length`)
 const exists = async (selector) => (await count(selector)) > 0
 
+/**
+ * Opens a sidebar view by its activity-bar label.
+ *
+ * Deliberately not by index: the activity bar has gained views over time
+ * (Structural Search, Plugins), and every index-based click silently started
+ * landing on the neighbouring view instead — nine diagram checks and five theme
+ * checks failed against a perfectly working app. The label is the stable handle.
+ */
+const openSidebar = (label, settle = 900) =>
+  cdp.click(`.activity-item[title^=${JSON.stringify(label)}]`, { settle })
+
 /* ================================================================== */
 /* 1. Shell & layout                                                   */
 /* ================================================================== */
@@ -214,15 +225,19 @@ async function section1() {
     return { ok: /src/.test(crumbs) && /orders\.py/.test(crumbs), detail: String(crumbs).slice(0, 60) }
   })
 
-  await r.guard('1.3', 'activity bar switches all 5 sidebar views', async () => {
+  await r.guard('1.3', 'activity bar switches every sidebar view', async () => {
+    const total = await count('.activity-item')
     const seen = []
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < total; i++) {
       await cdp.click('.activity-item', { nth: i, settle: 500 })
       seen.push((await text('.sidebar-title')) ?? '')
     }
-    await cdp.click('.activity-item', { nth: 0, settle: 400 })
+    await openSidebar('Explorer')
     const unique = new Set(seen.map((s) => s.trim()))
-    return { ok: unique.size >= 4, detail: JSON.stringify([...unique]) }
+    return {
+      ok: total >= 5 && unique.size >= total - 1,
+      detail: `${total} views: ${JSON.stringify([...unique])}`,
+    }
   })
 
   await r.guard('1.4', 'sidebar toggles from the title bar', async () => {
@@ -331,7 +346,17 @@ async function section2() {
       `return [...document.querySelectorAll('.context-item')].map(e => e.textContent.trim())`,
     )
     await cdp.key('Escape')
-    const wanted = ['New File', 'Rename', 'Local History', 'Copy Relative Path', 'Move to Trash']
+    // "Move to Trash" became "Safe Delete…" when deletion started going through
+    // the usage check, and the two folder-scoped searches were added beside it.
+    const wanted = [
+      'New File',
+      'Find in',
+      'Find File by Name',
+      'Rename',
+      'Local History',
+      'Copy Relative Path',
+      'Safe Delete',
+    ]
     return {
       ok: wanted.every((w) => items.some((i) => i.includes(w))),
       detail: JSON.stringify(items),
@@ -569,6 +594,59 @@ async function section4() {
       const s=(await import('/src/state/store.ts')).useStore; s.getState().setSidebarView('explorer'); return true`)
     return { ok: hits > 1 && opened && tab.endsWith('.py'), detail: `hits=${hits} tab=${tab}` }
   })
+
+  await r.guard('4.9', 'F12 goes to the declaration in another file', async () => {
+    await openFileByClick('src', 'main.py', 1800)
+    await cdp.waitFor(`document.querySelectorAll('.view-line').length > 0`, { label: 'editor' })
+    // Put the caret inside `build_service()` on the line that calls it.
+    const placed = await cdp.evaluate(`
+      const { monaco } = await import('/src/lib/monacoSetup.ts')
+      const ed = monaco.editor.getEditors()[0]
+      const lines = ed.getModel().getValue().split('\\n')
+      const ln = lines.findIndex(l => l.includes('service = build_service()')) + 1
+      if (!ln) return null
+      const col = lines[ln-1].indexOf('build_service') + 4
+      ed.focus(); ed.setPosition({ lineNumber: ln, column: col }); ed.revealLineInCenter(ln)
+      return { ln, col }`)
+    if (!placed) return { ok: false, detail: 'call site not found' }
+    await cdp.sleep(400)
+    await cdp.key('F12')
+    await cdp.sleep(2500)
+    const landed = await cdp.evaluate(`
+      const s=(await import('/src/state/store.ts')).useStore
+      const st = s.getState()
+      const tab = st.tabs.find(t => t.id === st.activeTabId)
+      return { file: (tab?.path ?? '').split('/').pop(), line: st.cursor.line }`)
+    return {
+      ok: landed.file === 'orders.py',
+      detail: `landed ${landed.file}:${landed.line}`,
+    }
+  })
+
+  await r.guard('4.10', 'Shift+F12 peeks references inline', async () => {
+    // Peek reads the word under the caret, so put it on the declaration by
+    // name rather than trusting wherever the previous check happened to land.
+    const placed = await cdp.evaluate(`
+      const { monaco } = await import('/src/lib/monacoSetup.ts')
+      const ed = monaco.editor.getEditors()[0]
+      const lines = ed.getModel().getValue().split('\\n')
+      const ln = lines.findIndex(l => l.includes('def build_service')) + 1
+      if (!ln) return null
+      const col = lines[ln-1].indexOf('build_service') + 4
+      ed.focus(); ed.setPosition({ lineNumber: ln, column: col }); ed.revealLineInCenter(ln)
+      return { ln, col }`)
+    if (!placed) return { ok: false, detail: 'declaration not found' }
+    await cdp.sleep(500)
+    await cdp.key('F12', ['shift'])
+    const peeks = await cdp
+      .waitFor(
+        `document.querySelectorAll('.monaco-editor .peekview-widget, .reference-zone-widget').length`,
+        { timeout: 12000, interval: 500, label: 'peek widget' },
+      )
+      .catch(() => 0)
+    await cdp.key('Escape')
+    return { ok: peeks > 0, detail: `peekWidgets=${peeks}` }
+  })
 }
 
 
@@ -607,11 +685,27 @@ async function section5() {
   })
 
   await r.guard('5.3', 'suggestion detail shows kind and source', async () => {
-    const details = await cdp.evaluate(`
+    // The collapsed row shows the kind as an *icon* and the origin as text;
+    // the `detail` string ("class in …") lives in the details pane, which has
+    // to be expanded. Asserting on the row's textContent instead reported a
+    // missing separator that does not exist — the two labels are separate
+    // elements with a margin between them.
+    const info = await cdp.evaluate(`
+      const { monaco } = await import('/src/lib/monacoSetup.ts')
+      monaco.editor.getEditors()[0].trigger('test', 'toggleSuggestionDetails', {})
+      await new Promise(res => setTimeout(res, 500))
       const row = [...document.querySelectorAll('.suggest-widget .monaco-list-row')]
         .find(e => e.textContent.includes('OrderService'))
-      return row ? row.textContent : ''`)
-    return { ok: /class/i.test(details), detail: details.slice(0, 90) }
+      const icon = row ? [...row.querySelectorAll('*')].map(e => e.className).join(' ') : ''
+      const origin = row ? (row.querySelector('.details-label')?.textContent ?? '') : ''
+      const pane = document.querySelector('.suggest-details')?.textContent ?? ''
+      return { icon, origin, pane }
+    `)
+    const kind = /codicon-symbol-class/.test(info.icon) || /class/i.test(info.pane)
+    return {
+      ok: kind && /orders/.test(info.origin),
+      detail: `origin=${info.origin.trim()} pane=${info.pane.slice(0, 40)}`,
+    }
   })
 
   await r.guard('5.4', 'accepting a suggestion inserts the identifier', async () => {
@@ -649,7 +743,7 @@ async function section6() {
   await reset()
 
   await r.guard('6.1', 'diagrams sidebar lists templates', async () => {
-    await cdp.click('.activity-item', { nth: 3, settle: 900 })
+    await openSidebar('Diagrams')
     const cards = await cdp.evaluate(
       `return [...document.querySelectorAll('.template-card')].map(e=>e.textContent.trim())`,
     )
@@ -657,7 +751,18 @@ async function section6() {
   })
 
   await r.guard('6.2', 'creating from a template opens the canvas editor', async () => {
-    await cdp.clickText('.template-card', 'UML class diagram', { settle: 2600 })
+    // "UML class diagram" is ambiguous: the sidebar now has a *Generate from
+    // code* card by that exact name which writes a Mermaid markdown file, and it
+    // comes first in the DOM. Only the cards under *New from template* create a
+    // canvas diagram, and those are the ones with a description.
+    await cdp.evaluate(`
+      const card = [...document.querySelectorAll('.template-card')]
+        .find(c => c.querySelector('small') && c.textContent.includes('UML class diagram'))
+      if (!card) throw new Error('no canvas template card named "UML class diagram"')
+      card.scrollIntoView({ block: 'center' })
+      return true
+    `)
+    await cdp.clickText('.template-card:has(small)', 'UML class diagram', { settle: 2600 })
     const ok = await cdp.waitFor(`document.querySelectorAll('.diagram-canvas').length > 0`, {
       label: 'diagram canvas',
     }).then(() => true).catch(() => false)
@@ -786,10 +891,15 @@ async function section7() {
   })
 
   await r.guard('7.4', 'source / split / preview modes switch', async () => {
+    // Scoped to the markdown editor's own preview pane. A bare `.markdown-body`
+    // also matches every rendered message in the AI console — and the console
+    // restores its previous chat on launch, so the unscoped check reported the
+    // source pane as broken whenever an earlier run had left a transcript.
+    const preview = '.md-preview .markdown-body'
     await cdp.clickText('.md-toolbar .segmented button', 'Preview', { settle: 900 })
-    const previewOnly = (await count('.view-line')) === 0 && (await exists('.markdown-body'))
+    const previewOnly = (await count('.view-line')) === 0 && (await exists(preview))
     await cdp.clickText('.md-toolbar .segmented button', 'Source', { settle: 900 })
-    const sourceOnly = (await count('.view-line')) > 0 && !(await exists('.markdown-body'))
+    const sourceOnly = (await count('.view-line')) > 0 && !(await exists(preview))
     await cdp.clickText('.md-toolbar .segmented button', 'Split', { settle: 900 })
     return { ok: previewOnly && sourceOnly, detail: `preview=${previewOnly} source=${sourceOnly}` }
   })
@@ -859,7 +969,7 @@ async function section9() {
   console.log('\n── 9. Git ──')
   await reset()
   await fs.appendFile(path.join(PROJECT, 'src', 'util.go'), '\n// git section marker\n')
-  await cdp.click('.activity-item', { nth: 2, settle: 2000 })
+  await openSidebar('Source Control', 2000)
 
   await r.guard('9.1', 'source control shows branch and change counts', async () => {
     const branch = await cdp.evaluate(
@@ -1388,10 +1498,12 @@ async function section13() {
   })
 
   await r.guard('13.3', 'sending a prompt streams a reply', async () => {
-    // Codex is the authenticated provider in this environment.
+    // Codex is the authenticated provider in this environment. The permission
+    // mode is pinned because it decides the sandbox flag the execution turn
+    // runs under — left on whatever the user last chose, 13.3c is a coin toss.
     await cdp.evaluate(`
       const s=(await import('/src/state/store.ts')).useStore
-      s.getState().setSettings({ aiProvider: 'codex' }); return true`)
+      s.getState().setSettings({ aiProvider: 'codex', aiPermissionMode: 'acceptEdits' }); return true`)
     await cdp.sleep(500)
     const box = await cdp.boxOf('.ai-composer textarea')
     await cdp.clickPoint(box, { clickCount: 3 })
@@ -1410,35 +1522,98 @@ async function section13() {
     return { ok: finished && reply > 0, detail: `finished=${finished} replyBlocks=${reply}` }
   })
 
-  await r.guard('13.4', 'tool calls render and expand', async () => {
-    const tools = await count('.ai-tool')
-    if (tools === 0) return { ok: false, detail: 'no tool rows' }
-    await cdp.click('.ai-tool > button', { settle: 700 })
-    const expanded = await exists('.ai-tool-detail')
-    return { ok: expanded, detail: `tools=${tools} expanded=${expanded}` }
+  // A request that changes files is planned first and executed only once the
+  // plan is approved, so the edit half of the console is behind that gate.
+  await r.guard('13.3b', 'an edit request is planned first and writes nothing yet', async () => {
+    const before = await fs.readFile(path.join(PROJECT, 'src', 'util.go'), 'utf8')
+    const planned = await cdp
+      .waitFor(
+        `(async () => { const s=(await import('/src/state/store.ts')).useStore
+           const p = s.getState().plan; return p && p.status === 'proposed' && p.steps.length > 0 })()`,
+        { timeout: 60000, interval: 1500, label: 'plan card' },
+      )
+      .then(() => true)
+      .catch(() => false)
+    const after = await fs.readFile(path.join(PROJECT, 'src', 'util.go'), 'utf8')
+    return {
+      ok: planned && before === after,
+      detail: `planned=${planned} untouched=${before === after}`,
+    }
   })
 
-  await r.guard('13.5', 'file changes appear as change cards', async () => {
-    const cards = await cdp.evaluate(
-      `return [...document.querySelectorAll('.change-card')].map(e=>e.textContent.trim())`,
+  await r.guard('13.3c', 'Approve executes the plan and the edit lands', async () => {
+    const clicked = await cdp.clickText('.plan-card .btn', 'Approve', { settle: 2000 })
+    if (!clicked) return { ok: false, detail: 'no Approve button' }
+    const done = await cdp
+      .waitFor(
+        `(async () => { const s=(await import('/src/state/store.ts')).useStore
+           const m = s.getState().messages.filter(x=>x.role==='assistant').pop()
+           return m && m.running === false })()`,
+        { timeout: 300000, interval: 2500, label: 'execution turn' },
+      )
+      .then(() => true)
+      .catch(() => false)
+    const body = await fs.readFile(path.join(PROJECT, 'src', 'util.go'), 'utf8')
+    return { ok: done && body.includes('checked by the UI suite'), detail: `finished=${done}` }
+  })
+
+  await r.guard('13.4', 'tool calls render as activity rows and expand', async () => {
+    const groups = await count('.activity-group')
+    if (groups === 0) return { ok: false, detail: 'no activity rows' }
+    await cdp.click('.activity-group .activity-line', { settle: 700 })
+    const expanded = await exists('.activity-detail, .activity-body, .activity-group pre')
+    return { ok: expanded, detail: `groups=${groups} expanded=${expanded}` }
+  })
+
+  await r.guard('13.5', 'each touched file appears as a change line with +/- counts', async () => {
+    const lines = await cdp.evaluate(
+      `return [...document.querySelectorAll('.ai-changes .activity-line')].map(e=>e.textContent.trim())`,
     )
-    return { ok: cards.length > 0, detail: JSON.stringify(cards).slice(0, 140) }
+    return { ok: lines.length > 0, detail: JSON.stringify(lines).slice(0, 140) }
   })
 
-  await r.guard('13.6', 'Review opens the diff in the editor', async () => {
-    const clicked = await cdp.click('.change-card [title^="Review diff"]', { settle: 2500 })
+  await r.guard('13.6', 'clicking a change line opens the diff in the editor', async () => {
+    const clicked = await cdp.click('.ai-changes .activity-line', { settle: 3000 })
     const diff = await exists('.monaco-diff-editor')
     return { ok: clicked && diff, detail: `clicked=${clicked} diff=${diff}` }
   })
 
-  await r.guard('13.7', 'Revert restores the file', async () => {
+  await r.guard('13.7', 'Revert in the diff view restores the file', async () => {
     const before = await fs.readFile(path.join(PROJECT, 'src', 'util.go'), 'utf8')
-    const clicked = await cdp.click('.change-card [title^="Revert this file"]', { settle: 2500 })
+    const clicked = await cdp.clickText('button', 'Revert', { settle: 3000 })
+    await cdp.sleep(1200)
     const after = await fs.readFile(path.join(PROJECT, 'src', 'util.go'), 'utf8')
     return {
       ok: clicked && before !== after && !after.includes('checked by the UI suite'),
-      detail: `changed=${before !== after}`,
+      detail: `clicked=${clicked} changed=${before !== after}`,
     }
+  })
+
+  await r.guard('13.9', 'the plan card is never crushed by the flex transcript', async () => {
+    const info = await cdp.evaluate(`
+      const s = (await import('/src/state/store.ts')).useStore
+      s.getState().setPlan({
+        id: 'ui-suite-plan', status: 'proposed',
+        summary: 'A plan tall enough to exceed the panel.',
+        steps: Array.from({ length: 9 }, (_, i) => ({
+          id: 's' + i, status: 'pending',
+          text: 'Step ' + (i + 1) + ' with a long enough description to wrap onto a second line',
+        })),
+      })
+      await new Promise(res => setTimeout(res, 600))
+      const card = document.querySelector('.plan-card')
+      if (!card) return { ok: false, detail: 'no plan card' }
+      const title = card.querySelector('.plan-title').getBoundingClientRect()
+      const box = card.getBoundingClientRect()
+      const approve = [...card.querySelectorAll('.btn')].some(b => b.textContent.includes('Approve'))
+      const out = {
+        ok: card.scrollHeight <= card.clientHeight + 1 && title.bottom <= box.bottom + 0.5 && approve,
+        detail: 'client=' + card.clientHeight + ' scroll=' + card.scrollHeight + ' approve=' + approve,
+      }
+      s.getState().setPlan(null)
+      return out
+    `)
+    return info
   })
 }
 
@@ -1557,7 +1732,7 @@ async function section15() {
   await reset()
 
   await r.guard('15.1', 'themes sidebar lists 10 themes with previews', async () => {
-    await cdp.click('.activity-item', { nth: 4, settle: 1200 })
+    await openSidebar('Themes', 1200)
     const cards = await count('.theme-card')
     const previews = await count('.theme-preview')
     return { ok: cards === 10 && previews === 10, detail: `cards=${cards} previews=${previews}` }

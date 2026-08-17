@@ -576,5 +576,32 @@ export function profileFor(language: string): LanguageProfile | null {
   return PROFILES[language] ?? null
 }
 
+/**
+ * A profile for languages the engine cannot *write*, but can still *read*.
+ *
+ * Rename, Optimize Imports and the batch inspections only need the lexical half
+ * of a profile — which tokens open a comment or a string — so that literal
+ * masking works. Refusing them outright for, say, HCL or Elixir would be a
+ * worse answer than masking with a superset of comment syntaxes: the cost of a
+ * wrong guess here is a match classified as a comment rather than as code, and
+ * both are shown in the preview before anything is written.
+ */
+export const GENERIC_PROFILE: LanguageProfile = {
+  ...typescript,
+  id: 'generic',
+  lineComments: ['//', '#', '--', ';;'],
+  blockComments: [
+    ['/*', '*/'],
+    ['<!--', '-->'],
+  ],
+  tripleQuotes: true,
+  keywords: new Set<string>(),
+}
+
+/** The profile to use when only literal masking is needed. */
+export function maskingProfileFor(language: string): LanguageProfile {
+  return PROFILES[language] ?? GENERIC_PROFILE
+}
+
 /** Human-readable list for the "not supported here" message. */
 export const SUPPORTED_LANGUAGES = Object.keys(PROFILES)

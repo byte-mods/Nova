@@ -1,4 +1,4 @@
-import { FolderOpen, Globe, Search, Shapes, Sparkles, Terminal } from 'lucide-react'
+import { FolderOpen, Globe, GraduationCap, Search, Shapes, Sparkles, Terminal } from 'lucide-react'
 import { useStore } from '@/state/store'
 import { newDiagramTab } from '@/components/diagram/diagramFile'
 import { timeAgo } from '@/lib/paths'
@@ -48,6 +48,19 @@ export default function WelcomeView() {
             </button>
             <button className="welcome-action" onClick={() => useStore.getState().toggleAi()}>
               <Sparkles size={15} /> Ask the AI console
+            </button>
+            {/* The first thing to want in a codebase you did not write. */}
+            <button
+              className="welcome-action"
+              disabled={!root}
+              title={
+                root
+                  ? 'Read this project and write its technical walkthrough'
+                  : 'Open a project first'
+              }
+              onClick={() => void useStore.getState().generateTutorial('book')}
+            >
+              <GraduationCap size={15} /> Explain this whole project
             </button>
           </div>
 

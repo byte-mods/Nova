@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { CaseSensitive, ChevronDown, ChevronRight, Loader2, Regex, Replace, Search } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { BookmarkPlus, CaseSensitive, ChevronDown, ChevronRight, Loader2, Regex, Replace, Search } from 'lucide-react'
 import type { SearchHit } from '@shared/types'
 import { useStore } from '@/state/store'
 import { basename, relative } from '@/lib/paths'
@@ -11,6 +11,8 @@ import { applyMask, buildReplaceEdit } from '@/lib/replaceInPath'
 export default function SearchView() {
   const root = useStore((s) => s.root)
   const iconPack = useStore((s) => s.settings.iconPack)
+  const scopes = useStore((s) => s.settings.searchScopes)
+  const pendingMask = useStore((s) => s.pendingSearchMask)
   const [query, setQuery] = useState('')
   const [replacement, setReplacement] = useState('')
   const [showReplace, setShowReplace] = useState(false)
@@ -21,6 +23,7 @@ export default function SearchView() {
   const [busy, setBusy] = useState(false)
   const [replacing, setReplacing] = useState(false)
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
+  const queryRef = useRef<HTMLInputElement>(null)
 
   // The palette's "Replace in Project" opens this pane with the field showing.
   useEffect(() => {
@@ -28,6 +31,25 @@ export default function SearchView() {
     window.addEventListener('nova:open-replace', open)
     return () => window.removeEventListener('nova:open-replace', open)
   }, [])
+
+  /**
+   * The Explorer's "Find in Folder" pre-fills the mask and puts the caret in the
+   * query, so the only thing left to type is what you are looking for.
+   *
+   * Read from the store rather than from an event: the Explorer switches to this
+   * pane and sets the scope in one go, so on the first use this component is
+   * still mounting and would miss an event entirely.
+   */
+  useEffect(() => {
+    if (pendingMask === null) return
+    setFileMask(pendingMask)
+    useStore.setState({ pendingSearchMask: null })
+    // `autoFocus` only fires on mount, so an already-open pane needs this.
+    setTimeout(() => {
+      queryRef.current?.focus()
+      queryRef.current?.select()
+    }, 60)
+  }, [pendingMask])
 
   useEffect(() => {
     if (!root || query.trim().length < 2) {
@@ -111,6 +133,7 @@ export default function SearchView() {
           />
           <input
             autoFocus
+            ref={queryRef}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search across the project"
@@ -162,12 +185,49 @@ export default function SearchView() {
           </div>
         )}
 
-        <input
-          value={fileMask}
-          onChange={(e) => setFileMask(e.target.value)}
-          placeholder="File mask, e.g. *.ts, src/**"
-          style={{ width: '100%', marginTop: 6, fontSize: 11.5 }}
-        />
+        <div className="row" style={{ marginTop: 6, gap: 6 }}>
+          <input
+            value={fileMask}
+            onChange={(e) => setFileMask(e.target.value)}
+            placeholder="File mask — *.ts, src/**, !**/*.test.*"
+            style={{ flex: 1, fontSize: 11.5 }}
+          />
+          {/* Custom scopes: named masks. Choosing one fills the mask; typing a
+              mask and saving it makes a new scope. */}
+          <select
+            className="select"
+            style={{ width: 110, fontSize: 11 }}
+            value=""
+            onChange={(e) => {
+              const scope = scopes.find((s) => s.name === e.target.value)
+              if (scope) setFileMask(scope.mask)
+            }}
+          >
+            <option value="">Scope…</option>
+            {scopes.map((scope) => (
+              <option key={scope.name} value={scope.name}>
+                {scope.name}
+              </option>
+            ))}
+          </select>
+          <button
+            className="icon-btn"
+            style={{ width: 22, height: 22 }}
+            title="Save the current mask as a named scope"
+            disabled={!fileMask.trim()}
+            onClick={() => {
+              const name = window.prompt('Scope name:')
+              if (!name?.trim()) return
+              const next = [
+                ...scopes.filter((scope) => scope.name !== name.trim()),
+                { name: name.trim(), mask: fileMask },
+              ]
+              useStore.getState().setSettings({ searchScopes: next })
+            }}
+          >
+            <BookmarkPlus size={13} />
+          </button>
+        </div>
         {hits.length > 0 && (
           <div className="faint" style={{ marginTop: 8, fontSize: 11 }}>
             {hits.length} result{hits.length === 1 ? '' : 's'} in {grouped.length} file

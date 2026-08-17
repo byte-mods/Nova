@@ -27,7 +27,8 @@
     "test": "node tests/run.mjs",
     "test:offline": "node tests/run.mjs offline",
     "test:tools": "node tests/run.mjs tools",
-    "test:ui": "node tests/verify-ui.mjs"
+    "test:ui": "node tests/verify-ui.mjs",
+    "icon": "node scripts/make-icon.mjs"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.6.0",
@@ -59,19 +60,28 @@
   },
   "build": {
     "appId": "dev.nova.ide",
-    "productName": "Nova IDE",
+    "productName": "Nova",
     "directories": {
       "output": "release"
     },
     "files": [
       "dist/**/*",
-      "dist-electron/**/*"
+      "dist-electron/**/*",
+      "build/icon.png"
     ],
     "mac": {
       "category": "public.app-category.developer-tools",
+      "icon": "build/icon.icns",
       "target": [
         "dmg"
       ]
+    },
+    "win": {
+      "icon": "build/icon.png"
+    },
+    "linux": {
+      "icon": "build/icon.png",
+      "category": "Development"
     },
     "asarUnpack": [
       "node_modules/node-pty/**"

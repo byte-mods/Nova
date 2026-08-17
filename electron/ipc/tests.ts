@@ -12,6 +12,7 @@ import {
   type TestScope,
 } from '../lib/testFrameworks'
 import { languageForPath } from '../../shared/languages'
+import { coverageArgs, findReport, loadReport } from '../lib/coverage'
 
 interface Ctx {
   broadcast: (channel: string, payload: unknown) => void
@@ -68,7 +69,13 @@ export function registerTestHandlers(ctx: Ctx) {
 
   ipcMain.handle(
     'tests:run',
-    async (_e, root: string, frameworkId: string, scope: TestScope) => {
+    async (
+      _e,
+      root: string,
+      frameworkId: string,
+      scope: TestScope,
+      options?: { coverage?: boolean },
+    ) => {
       const runId = `test_${Date.now().toString(36)}`
       const context = await buildContext(root)
       const framework =
@@ -90,6 +97,25 @@ export function registerTestHandlers(ctx: Ctx) {
       const started = Date.now()
       let usedFallback = false
       let { command, args } = framework.command(scope, context)
+      // Run With Coverage: the same run with the framework's own coverage
+      // flags appended, so the Coverage panel has a fresh report to read.
+      if (options?.coverage) {
+        const extra = coverageArgs(framework.id)
+        if (extra) args = [...args, ...extra]
+        else {
+          ctx.broadcast('tests:update', {
+            runId,
+            framework: framework.id,
+            command: '',
+            events: [
+              {
+                type: 'output',
+                text: `${framework.label} has no coverage mode Nova knows how to enable — running without it.\n`,
+              },
+            ],
+          })
+        }
+      }
       let child = spawnRunner(command, args, root)
       current = child
 
@@ -176,4 +202,16 @@ export function registerTestHandlers(ctx: Ctx) {
     current?.kill('SIGTERM')
     current = null
   })
+}
+
+/**
+ * Coverage handlers.
+ *
+ * Kept beside the test handlers because coverage is produced by a test run and
+ * is meaningless without one — the UI reads it right after `tests:run` finishes.
+ */
+export function registerCoverageHandlers() {
+  ipcMain.handle('coverage:load', (_e, root: string, file?: string) => loadReport(root, file))
+  ipcMain.handle('coverage:find', (_e, root: string) => findReport(root))
+  ipcMain.handle('coverage:args', (_e, frameworkId: string) => coverageArgs(frameworkId))
 }

@@ -1,7 +1,28 @@
-import { defineConfig } from 'vite'
+import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import electron from 'vite-plugin-electron/simple'
 import { fileURLToPath, URL } from 'node:url'
+import { copyFileSync, mkdirSync } from 'node:fs'
+
+/**
+ * The plugin host runs as a forked Node process, so it must reach the output as
+ * a real file rather than being bundled into `main.js`. Copying it is simpler
+ * than adding a third rollup entry, and keeps it readable on disk — which
+ * matters, since it is the file plugin authors debug against.
+ */
+function copyPluginHost(): Plugin {
+  const copy = () => {
+    const from = fileURLToPath(new URL('./electron/plugin-host/host.mjs', import.meta.url))
+    const toDir = fileURLToPath(new URL('./dist-electron/plugin-host', import.meta.url))
+    mkdirSync(toDir, { recursive: true })
+    copyFileSync(from, `${toDir}/host.mjs`)
+  }
+  return {
+    name: 'nova:copy-plugin-host',
+    buildStart: copy,
+    configureServer: copy,
+  }
+}
 
 export default defineConfig({
   resolve: {
@@ -12,6 +33,7 @@ export default defineConfig({
   },
   plugins: [
     react(),
+    copyPluginHost(),
     electron({
       main: {
         entry: 'electron/main.ts',

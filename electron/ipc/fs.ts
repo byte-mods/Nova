@@ -5,6 +5,7 @@ import path from 'node:path'
 import type { DirEntry, FileReadResult, SearchHit } from '../../shared/types'
 import { BINARY_EXT, IGNORED_DIRS, looksBinary, walk } from '../lib/scan'
 import { clear as clearHistory, list as listHistory, read as readHistory, record } from '../lib/localHistory'
+import { resolveEditorConfig } from '../lib/editorConfig'
 
 interface Ctx {
   broadcast: (channel: string, payload: unknown) => void
@@ -113,6 +114,12 @@ export function registerFsHandlers(ctx: Ctx) {
       return target
     }
   })
+
+  // The code style a file should actually be formatted with, once the repo's
+  // own `.editorconfig` has had its say.
+  ipcMain.handle('editorconfig:resolve', (_e, file: string, root: string) =>
+    resolveEditorConfig(file, root || projectRoot),
+  )
 
   ipcMain.handle('history:list', (_e, file: string) => listHistory(projectRoot, file))
   ipcMain.handle('history:read', (_e, file: string, id: string) =>

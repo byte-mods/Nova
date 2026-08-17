@@ -6,12 +6,14 @@ import { DapClient } from './dapClient'
 import { ADAPTERS, adaptersForLanguage, type AdapterSpec } from './debugRegistry'
 import { toolEnv, which, whichXcrun } from './env'
 import type {
+  DataBreakpoint,
   DebugAdapterStatus,
   DebugBreakpoint,
   DebugScope,
   DebugStackFrame,
   DebugState,
   DebugVariable,
+  ExceptionFilter,
 } from '../../shared/types'
 
 export interface LaunchRequest {
@@ -41,6 +43,23 @@ export class DebugSession {
   /** file -> the breakpoints the user has set, ordered by line. */
   private breakpoints = new Map<string, DebugBreakpoint[]>()
   private verified = new Map<string, number[]>()
+  /**
+   * Break-on-exception categories.
+   *
+   * The adapter decides which categories exist (`raised`, `uncaught`, `assert`
+   * …) and Nova decides which are on. Selection is kept by filter id rather
+   * than by index, because the list is per adapter and a project may be
+   * debugged with more than one.
+   */
+  private exceptionFilters: ExceptionFilter[] = []
+  private exceptionChoice = new Map<string, { enabled: boolean; condition: string }>()
+  /** Field/data watchpoints, keyed by the adapter's opaque dataId. */
+  private dataBreakpoints: DataBreakpoint[] = []
+  /**
+   * The Run to Cursor target, armed as a one-shot breakpoint the adapter never
+   * learns is temporary — it is withdrawn as soon as the program stops.
+   */
+  private runToCursor: { file: string; line: number } | null = null
   /** The open project, used to scope persisted breakpoints. */
   private projectRoot = ''
 
@@ -100,8 +119,20 @@ export class DebugSession {
         verified: this.verified.get(file) ?? [],
         items,
       })),
+      exceptionFilters: this.exceptionFilters.map((filter) => ({
+        ...filter,
+        ...(this.exceptionChoice.get(filter.filter) ?? {
+          enabled: filter.default,
+          condition: '',
+        }),
+      })),
+      dataBreakpoints: this.dataBreakpoints,
       supportsStepBack: Boolean(this.capabilities.supportsStepBack),
       supportsRestart: Boolean(this.capabilities.supportsRestartRequest),
+      supportsDropFrame: Boolean(this.capabilities.supportsRestartFrame),
+      supportsSetVariable: Boolean(this.capabilities.supportsSetVariable),
+      supportsDataBreakpoints: Boolean(this.capabilities.supportsDataBreakpoints),
+      runningToCursor: this.runToCursor !== null,
     }
   }
 
@@ -154,6 +185,12 @@ export class DebugSession {
     // A disabled breakpoint stays in the gutter but is not sent, which is how
     // it can be muted without losing its condition.
     const items = (this.breakpoints.get(file) ?? []).filter((b) => b.enabled)
+    // The Run to Cursor target rides along with the file's real breakpoints so
+    // the adapter only ever sees one `setBreakpoints` per source.
+    if (this.runToCursor?.file === file && !items.some((b) => b.line === this.runToCursor!.line)) {
+      items.push({ line: this.runToCursor.line, enabled: true })
+      items.sort((a, b) => a.line - b.line)
+    }
     try {
       const body = await this.client.request('setBreakpoints', {
         source: { path: file, name: path.basename(file) },
@@ -198,11 +235,24 @@ export class DebugSession {
       this.publish()
       return
     }
+    this.exceptionChoice.clear()
     try {
-      const raw = JSON.parse(await fsp.readFile(this.storePath(), 'utf8')) as Record<string, DebugBreakpoint[]>
-      for (const [file, items] of Object.entries(raw)) {
-        const clean = (items ?? []).filter((b) => Number.isFinite(b?.line))
+      const raw = JSON.parse(await fsp.readFile(this.storePath(), 'utf8')) as
+        | Record<string, DebugBreakpoint[]>
+        | { files: Record<string, DebugBreakpoint[]>; exceptions?: Record<string, { enabled: boolean; condition: string }> }
+      // Older stores were a bare file->breakpoints map; read both shapes.
+      const files = 'files' in raw && raw.files ? raw.files : (raw as Record<string, DebugBreakpoint[]>)
+      for (const [file, items] of Object.entries(files)) {
+        if (!Array.isArray(items)) continue
+        const clean = items.filter((b) => Number.isFinite(b?.line))
         if (clean.length) this.breakpoints.set(file, clean)
+      }
+      const exceptions = 'files' in raw ? raw.exceptions : undefined
+      for (const [filter, choice] of Object.entries(exceptions ?? {})) {
+        this.exceptionChoice.set(filter, {
+          enabled: Boolean(choice?.enabled),
+          condition: String(choice?.condition ?? ''),
+        })
       }
     } catch {
       /* nothing saved for this project yet */
@@ -215,7 +265,17 @@ export class DebugSession {
     const target = this.storePath()
     try {
       await fsp.mkdir(path.dirname(target), { recursive: true })
-      await fsp.writeFile(target, JSON.stringify(Object.fromEntries(this.breakpoints), null, 2))
+      await fsp.writeFile(
+        target,
+        JSON.stringify(
+          {
+            files: Object.fromEntries(this.breakpoints),
+            exceptions: Object.fromEntries(this.exceptionChoice),
+          },
+          null,
+          2,
+        ),
+      )
     } catch {
       /* a lost breakpoint file is not worth surfacing */
     }
@@ -279,6 +339,7 @@ export class DebugSession {
         supportsRunInTerminalRequest: false,
         supportsProgressReporting: true,
       })) ?? {}
+      this.adoptExceptionFilters()
 
       const launchArgs = {
         ...spec.launchDefaults,
@@ -320,12 +381,139 @@ export class DebugSession {
     if (!client?.running || this.configured) return
     this.configured = true
     for (const file of this.breakpoints.keys()) await this.sendBreakpoints(file)
-    if (this.capabilities.exceptionBreakpointFilters) {
-      await client.request('setExceptionBreakpoints', { filters: [] }).catch(() => undefined)
-    }
+    await this.sendExceptionBreakpoints()
     if (this.capabilities.supportsConfigurationDoneRequest !== false) {
       await client.request('configurationDone').catch(() => undefined)
     }
+  }
+
+  /* ---------------- exception breakpoints ---------------- */
+
+  /**
+   * Reads the adapter's categories out of its capabilities and reconciles them
+   * with what the user chose last time.
+   *
+   * This is what makes break-on-throw actually work: the filters have to be
+   * sent by id, and the ids only exist once `initialize` has answered.
+   */
+  private adoptExceptionFilters() {
+    const raw = (this.capabilities.exceptionBreakpointFilters ?? []) as any[]
+    this.exceptionFilters = raw.map((entry) => ({
+      filter: String(entry.filter),
+      label: String(entry.label ?? entry.filter),
+      description: String(entry.description ?? ''),
+      default: Boolean(entry.default),
+      supportsCondition: Boolean(entry.supportsCondition),
+      conditionDescription: String(entry.conditionDescription ?? ''),
+      enabled: Boolean(entry.default),
+      condition: '',
+    }))
+    for (const filter of this.exceptionFilters) {
+      if (!this.exceptionChoice.has(filter.filter)) {
+        this.exceptionChoice.set(filter.filter, { enabled: filter.default, condition: '' })
+      }
+    }
+  }
+
+  private async sendExceptionBreakpoints() {
+    const client = this.client
+    if (!client?.running || this.exceptionFilters.length === 0) return
+    const chosen = this.exceptionFilters.filter(
+      (filter) => (this.exceptionChoice.get(filter.filter)?.enabled ?? filter.default),
+    )
+    const conditions = chosen
+      .filter((filter) => filter.supportsCondition && this.exceptionChoice.get(filter.filter)?.condition)
+      .map((filter) => ({
+        filterId: filter.filter,
+        condition: this.exceptionChoice.get(filter.filter)!.condition,
+      }))
+
+    await client
+      .request('setExceptionBreakpoints', {
+        filters: chosen.map((filter) => filter.filter),
+        ...(conditions.length && this.capabilities.supportsExceptionFilterOptions
+          ? { filterOptions: conditions.map((c) => ({ filterId: c.filterId, condition: c.condition })) }
+          : {}),
+      })
+      .catch(() => undefined)
+  }
+
+  async setExceptionBreakpoint(filter: string, patch: { enabled?: boolean; condition?: string }) {
+    const current = this.exceptionChoice.get(filter) ?? { enabled: false, condition: '' }
+    this.exceptionChoice.set(filter, { ...current, ...patch })
+    await this.sendExceptionBreakpoints()
+    void this.persist()
+    this.publish()
+  }
+
+  /* ---------------- data (field) watchpoints ---------------- */
+
+  /**
+   * Adds a watchpoint on a variable: break when the program writes to it.
+   *
+   * The adapter turns a (name, container) pair into an opaque `dataId` first —
+   * the id is only valid for the current session, so watchpoints are not
+   * persisted the way line breakpoints are.
+   */
+  async addDataBreakpoint(
+    name: string,
+    variablesReference: number,
+    accessType: DataBreakpoint['accessType'] = 'write',
+  ): Promise<{ ok: boolean; message: string }> {
+    const client = this.client
+    if (!client?.running) return { ok: false, message: 'Start a debug session first.' }
+    if (!this.capabilities.supportsDataBreakpoints) {
+      return { ok: false, message: `${this.spec?.label ?? 'This adapter'} does not support watchpoints.` }
+    }
+    try {
+      const info = await client.request('dataBreakpointInfo', {
+        name,
+        ...(variablesReference ? { variablesReference } : {}),
+        ...(this.currentFrameId !== null ? { frameId: this.currentFrameId } : {}),
+      })
+      if (!info?.dataId) {
+        return { ok: false, message: info?.description || `\`${name}\` cannot be watched here.` }
+      }
+      const supported: string[] = info.accessTypes ?? ['write']
+      const chosen = supported.includes(accessType) ? accessType : (supported[0] as DataBreakpoint['accessType'])
+      this.dataBreakpoints = [
+        ...this.dataBreakpoints.filter((b) => b.dataId !== info.dataId),
+        {
+          dataId: info.dataId,
+          label: info.description || name,
+          accessType: chosen,
+          enabled: true,
+        },
+      ]
+      await this.sendDataBreakpoints()
+      this.publish()
+      return { ok: true, message: `Watching ${info.description || name}` }
+    } catch (err) {
+      return { ok: false, message: (err as Error).message }
+    }
+  }
+
+  async removeDataBreakpoint(dataId: string) {
+    this.dataBreakpoints = this.dataBreakpoints.filter((b) => b.dataId !== dataId)
+    await this.sendDataBreakpoints()
+    this.publish()
+  }
+
+  private async sendDataBreakpoints() {
+    const client = this.client
+    if (!client?.running || !this.capabilities.supportsDataBreakpoints) return
+    await client
+      .request('setDataBreakpoints', {
+        breakpoints: this.dataBreakpoints
+          .filter((b) => b.enabled)
+          .map((b) => ({
+            dataId: b.dataId,
+            accessType: b.accessType,
+            ...(b.condition ? { condition: b.condition } : {}),
+            ...(b.hitCondition ? { hitCondition: b.hitCondition } : {}),
+          })),
+      })
+      .catch(() => undefined)
   }
 
   private async onEvent(event: string, body: any) {
@@ -340,6 +528,8 @@ export class DebugSession {
         this.status = 'paused'
         this.stopReason = body?.reason ?? 'pause'
         this.threadId = body?.threadId ?? this.threadId
+        // Whatever stopped us, the Run to Cursor target has served its purpose.
+        await this.clearRunToCursor()
         await this.refreshStack()
         this.events.onStopped()
         this.publish()
@@ -429,6 +619,92 @@ export class DebugSession {
     }
   }
 
+  /**
+   * Writes a new value into a variable while paused.
+   *
+   * `setVariable` is the container-scoped form and works for locals and object
+   * members; `setExpression` handles everything addressable by an expression.
+   * Adapters implement one, the other, or both, so both are tried.
+   */
+  async setVariable(
+    variablesReference: number,
+    name: string,
+    value: string,
+  ): Promise<{ ok: boolean; value: string; error: string }> {
+    const client = this.client
+    if (!client?.running) return { ok: false, value: '', error: 'Not running' }
+    if (this.capabilities.supportsSetVariable && variablesReference) {
+      try {
+        const body = await client.request('setVariable', { variablesReference, name, value })
+        this.publish()
+        return { ok: true, value: body?.value ?? value, error: '' }
+      } catch (err) {
+        if (!this.capabilities.supportsSetExpression) {
+          return { ok: false, value: '', error: (err as Error).message }
+        }
+      }
+    }
+    if (!this.capabilities.supportsSetExpression) {
+      return {
+        ok: false,
+        value: '',
+        error: `${this.spec?.label ?? 'This adapter'} cannot change variables.`,
+      }
+    }
+    try {
+      const body = await client.request('setExpression', {
+        expression: name,
+        value,
+        frameId: this.currentFrameId ?? undefined,
+      })
+      this.publish()
+      return { ok: true, value: body?.value ?? value, error: '' }
+    } catch (err) {
+      return { ok: false, value: '', error: (err as Error).message }
+    }
+  }
+
+  /**
+   * Run to Cursor: continue, but stop at `line` even without a breakpoint
+   * there.
+   *
+   * Implemented as a one-shot breakpoint rather than DAP's `goto`, because
+   * `goto` *skips* the intervening code — which is a different feature, and not
+   * the one anybody means by Run to Cursor.
+   */
+  async runToLine(file: string, line: number) {
+    if (!this.client?.running) return
+    this.runToCursor = { file, line }
+    await this.sendBreakpoints(file)
+    this.publish()
+    await this.control('continue')
+  }
+
+  /** Withdraws the temporary breakpoint once the program has stopped. */
+  private async clearRunToCursor() {
+    const target = this.runToCursor
+    if (!target) return
+    this.runToCursor = null
+    await this.sendBreakpoints(target.file)
+  }
+
+  /** IntelliJ's Drop Frame: re-enter the selected frame from its first line. */
+  async dropFrame(frameId?: number) {
+    const client = this.client
+    if (!client?.running) return { ok: false, error: 'Not running' }
+    if (!this.capabilities.supportsRestartFrame) {
+      return { ok: false, error: `${this.spec?.label ?? 'This adapter'} cannot drop frames.` }
+    }
+    const target = frameId ?? this.currentFrameId
+    if (target === null || target === undefined) return { ok: false, error: 'No frame selected' }
+    try {
+      await client.request('restartFrame', { frameId: target })
+      return { ok: true, error: '' }
+    } catch (err) {
+      return { ok: false, error: (err as Error).message }
+    }
+  }
+
   async evaluate(expression: string, frameId?: number, context = 'watch') {
     if (!this.client?.running) return { result: '', variablesReference: 0, error: 'Not running' }
     try {
@@ -506,6 +782,9 @@ export class DebugSession {
     this.frames = []
     this.threadId = null
     this.currentFrameId = null
+    this.runToCursor = null
+    // Watchpoint ids belong to the process that just died.
+    this.dataBreakpoints = []
     this.publish()
   }
 }

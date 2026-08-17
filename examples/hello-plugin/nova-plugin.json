@@ -1,0 +1,26 @@
+{
+  "id": "dev.nova.hello",
+  "name": "Hello Nova",
+  "version": "1.0.0",
+  "description": "The reference plugin: one command, one view, one MCP server. Copy this directory to start your own.",
+  "author": "Nova IDE",
+  "license": "Apache-2.0",
+  "engine": ">=0.1.0",
+  "main": "index.mjs",
+  "permissions": ["workspace:read", "editor", "ui", "shell"],
+  "contributes": {
+    "commands": [
+      { "id": "hello.count", "title": "Count files in this project", "category": "Hello" },
+      { "id": "hello.describeActive", "title": "Describe the active file", "category": "Hello" }
+    ],
+    "views": [{ "id": "hello.panel", "title": "Hello", "icon": "Boxes", "location": "panel" }],
+    "mcpServers": [
+      {
+        "name": "project-stats",
+        "command": "node",
+        "args": ["mcp-server.mjs"],
+        "description": "Gives the assistant a tool that counts files by extension."
+      }
+    ]
+  }
+}

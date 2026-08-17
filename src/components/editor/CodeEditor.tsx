@@ -9,11 +9,14 @@ import { registerCodeIntelligence, wordAt } from '@/lib/monacoProviders'
 import { REFACTORINGS } from '@/lib/refactor'
 import { clearActiveEditor, runRefactoring, setActiveEditor, siteFromEditor } from '@/lib/refactor/bridge'
 import BlameGutter from './BlameGutter'
+import Breadcrumbs from './Breadcrumbs'
 
 export default function CodeEditor({ path }: { path: string }) {
   const buffer = useStore((s) => s.buffers[path])
   const settings = useStore((s) => s.settings)
   const debugState = useStore((s) => s.debug.state)
+  const coverage = useStore((s) => s.coverage)
+  const coverageVisible = useStore((s) => s.coverageVisible)
   const editorRef = useRef<monacoNs.editor.IStandaloneCodeEditor | null>(null)
   /**
    * Decorations need the editor to exist. Mounting does not re-render on its
@@ -63,12 +66,20 @@ export default function CodeEditor({ path }: { path: string }) {
       )
     })
 
+    let locationTimer: ReturnType<typeof setTimeout> | undefined
     editor.onDidChangeCursorPosition((e) => {
       const position = { line: e.position.lineNumber, column: e.position.column }
       // The status bar listens to the event; bookmarks and the palette need it
       // in the store, where they can read it without an editor reference.
       useStore.setState({ cursor: position })
       window.dispatchEvent(new CustomEvent('nova:cursor', { detail: position }))
+      // Recent Locations records where the caret *settled*, not every line it
+      // passed through while scrolling with the arrow keys.
+      clearTimeout(locationTimer)
+      locationTimer = setTimeout(
+        () => useStore.getState().noteLocation(path, position.line, position.column),
+        600,
+      )
     })
 
     editor.addCommand(monacoApi.KeyMod.CtrlCmd | monacoApi.KeyCode.KeyS, () => {
@@ -122,13 +133,15 @@ export default function CodeEditor({ path }: { path: string }) {
       run: () => useStore.getState().setPalette(true, 'symbol'),
     })
 
-    // IntelliJ bindings for the language-server refactorings.
+    // Inline rename. ⇧F6 opens the full Rename dialog (registered below with
+    // the rest of the refactorings); F2 is the in-place variant, which runs the
+    // same index-backed engine when no language server is available.
     editor.addAction({
-      id: 'nova.rename',
-      label: 'Rename Symbol (language server)',
-      keybindings: [monacoApi.KeyMod.Shift | monacoApi.KeyCode.F6],
+      id: 'nova.renameInline',
+      label: 'Rename Symbol In Place',
+      keybindings: [monacoApi.KeyCode.F2],
       contextMenuGroupId: '1_modification',
-      contextMenuOrder: 1.1,
+      contextMenuOrder: 1.15,
       run: (ed) => ed.trigger('nova', 'editor.action.rename', null),
     })
 
@@ -139,6 +152,38 @@ export default function CodeEditor({ path }: { path: string }) {
       contextMenuGroupId: '1_modification',
       contextMenuOrder: 1.2,
       run: (ed) => ed.trigger('nova', 'editor.action.quickFix', null),
+    })
+
+    // IntelliJ's Run to Cursor: continue, but stop here. Only meaningful while
+    // a session is suspended, so it reports rather than silently doing nothing.
+    editor.addAction({
+      id: 'nova.runToCursor',
+      label: 'Run to Cursor',
+      keybindings: [monacoApi.KeyMod.Alt | monacoApi.KeyCode.F9],
+      contextMenuGroupId: 'debug',
+      contextMenuOrder: 1.1,
+      run: (ed) => {
+        const line = ed.getPosition()?.lineNumber
+        const store = useStore.getState()
+        if (!line) return
+        if (store.debug.state?.status !== 'paused') {
+          store.notify('Run to Cursor needs a suspended debug session.', 'error')
+          return
+        }
+        void window.nova.debug.runToLine(path, line)
+      },
+    })
+
+    editor.addAction({
+      id: 'nova.toggleBreakpoint',
+      label: 'Toggle Breakpoint',
+      keybindings: [monacoApi.KeyMod.CtrlCmd | monacoApi.KeyCode.F8],
+      contextMenuGroupId: 'debug',
+      contextMenuOrder: 1.2,
+      run: (ed) => {
+        const line = ed.getPosition()?.lineNumber
+        if (line) void useStore.getState().toggleBreakpoint(path, line)
+      },
     })
 
     editor.addAction({
@@ -168,6 +213,22 @@ export default function CodeEditor({ path }: { path: string }) {
       run: hierarchyAt('callers'),
     })
 
+    // IntelliJ's Show History for Selection — `git log -L` on the chosen lines.
+    editor.addAction({
+      id: 'nova.lineHistory',
+      label: 'Git: History for Selection',
+      contextMenuGroupId: 'navigation',
+      contextMenuOrder: 1.95,
+      run: async (ed) => {
+        const selection = ed.getSelection()
+        const from = selection?.startLineNumber ?? ed.getPosition()?.lineNumber
+        const to = selection?.endLineNumber ?? from
+        if (!from || !to) return
+        const { openLineHistory } = await import('./LineHistoryView')
+        openLineHistory(path, Math.min(from, to), Math.max(from, to))
+      },
+    })
+
     editor.addAction({
       id: 'nova.typeHierarchy',
       label: 'Type Hierarchy',
@@ -179,13 +240,59 @@ export default function CodeEditor({ path }: { path: string }) {
 
     editor.addAction({
       id: 'nova.format',
-      label: 'Format Document',
+      label: 'Reformat Code',
       keybindings: [
         monacoApi.KeyMod.CtrlCmd | monacoApi.KeyMod.Alt | monacoApi.KeyCode.KeyL,
       ],
       contextMenuGroupId: '1_modification',
       contextMenuOrder: 1.3,
-      run: (ed) => ed.trigger('nova', 'editor.action.formatDocument', null),
+      run: async (ed) => {
+        const { formatDocument } = await import('@/lib/format')
+        await formatDocument(ed, path)
+      },
+    })
+
+    // IntelliJ's ⌃⌥O. Works off the file's own text, so it needs no tooling.
+    editor.addAction({
+      id: 'nova.optimizeImports',
+      label: 'Optimize Imports',
+      keybindings: [
+        monacoApi.KeyMod.WinCtrl | monacoApi.KeyMod.Alt | monacoApi.KeyCode.KeyO,
+      ],
+      contextMenuGroupId: '1_modification',
+      contextMenuOrder: 1.35,
+      run: async (ed) => {
+        const { optimizeImportsIn } = await import('@/lib/format')
+        await optimizeImportsIn(ed, path)
+      },
+    })
+
+    /* ---- macros ---- */
+
+    editor.addAction({
+      id: 'nova.macroToggle',
+      label: 'Start / Stop Macro Recording',
+      keybindings: [monacoApi.KeyMod.CtrlCmd | monacoApi.KeyMod.Alt | monacoApi.KeyCode.KeyR],
+      run: async (ed) => {
+        const { toggleRecording } = await import('@/lib/macros')
+        const node = ed.getDomNode()
+        if (node) toggleRecording(node)
+      },
+    })
+
+    editor.addAction({
+      id: 'nova.macroPlay',
+      label: 'Play Back Last Macro',
+      keybindings: [
+        monacoApi.KeyMod.CtrlCmd | monacoApi.KeyMod.Alt | monacoApi.KeyMod.Shift | monacoApi.KeyCode.KeyR,
+      ],
+      run: async (ed) => {
+        const { playMacro } = await import('@/lib/macros')
+        const node = ed.getDomNode()
+        if (node) {
+          await playMacro(node, (text) => ed.trigger('macro', 'type', { text }))
+        }
+      },
     })
 
     /* ---- refactorings ---- */
@@ -209,6 +316,7 @@ export default function CodeEditor({ path }: { path: string }) {
 
     // IntelliJ's default keymap, one action per refactoring.
     const BINDINGS: Partial<Record<(typeof REFACTORINGS)[number]['id'], number>> = {
+      rename: monacoApi.KeyMod.Shift | monacoApi.KeyCode.F6,
       'extract.variable': monacoApi.KeyMod.CtrlCmd | monacoApi.KeyMod.Alt | monacoApi.KeyCode.KeyV,
       'extract.constant': monacoApi.KeyMod.CtrlCmd | monacoApi.KeyMod.Alt | monacoApi.KeyCode.KeyC,
       'extract.field': monacoApi.KeyMod.CtrlCmd | monacoApi.KeyMod.Alt | monacoApi.KeyCode.KeyF,
@@ -328,6 +436,49 @@ export default function CodeEditor({ path }: { path: string }) {
     return () => collection.clear()
   }, [path, debugState, mounted])
 
+  /**
+   * Coverage stripes in the margin.
+   *
+   * A thin coloured bar rather than a line highlight: coverage is background
+   * information you want visible while reading code, and a full-width tint over
+   * every uncovered line makes the code itself harder to read.
+   */
+  useEffect(() => {
+    const editor = editorRef.current
+    if (!editor || !coverageVisible || !coverage) return
+
+    const file = coverage.files.find((f) => f.path === path)
+    if (!file) return
+
+    const partial = new Set(file.partial)
+    const decorations: monacoNs.editor.IModelDeltaDecoration[] = []
+
+    for (const [rawLine, hits] of Object.entries(file.lines)) {
+      const line = Number(rawLine)
+      const isPartial = partial.has(line)
+      if (hits > 0 && !isPartial) {
+        decorations.push({
+          range: new monaco.Range(line, 1, line, 1),
+          options: { linesDecorationsClassName: 'nova-cov covered', stickiness: 1 },
+        })
+      } else {
+        decorations.push({
+          range: new monaco.Range(line, 1, line, 1),
+          options: {
+            linesDecorationsClassName: `nova-cov ${isPartial ? 'partial' : 'uncovered'}`,
+            hoverMessage: {
+              value: isPartial ? 'Some branches on this line were never taken.' : 'Not covered by any test.',
+            },
+            stickiness: 1,
+          },
+        })
+      }
+    }
+
+    const collection = editor.createDecorationsCollection(decorations)
+    return () => collection.clear()
+  }, [path, coverage, coverageVisible, mounted])
+
   useEffect(() => {
     const goto = (e: Event) => {
       const detail = (e as CustomEvent).detail as { path: string; line: number; column?: number }
@@ -389,12 +540,21 @@ export default function CodeEditor({ path }: { path: string }) {
     />
   )
 
-  if (!settings.showBlame) return editorNode
-
-  return (
+  const body = settings.showBlame ? (
     <div className="editor-with-blame">
       <BlameGutter path={path} lineHeight={Math.round(settings.fontSize * 1.5)} />
       <div style={{ flex: 1, minWidth: 0 }}>{editorNode}</div>
+    </div>
+  ) : (
+    editorNode
+  )
+
+  if (!settings.breadcrumbs) return body
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+      <Breadcrumbs path={path} />
+      <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>{body}</div>
     </div>
   )
 }

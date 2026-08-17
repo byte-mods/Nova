@@ -33,8 +33,18 @@ function applyAll(files, result) {
   }
   for (const change of result.edit.documentChanges ?? []) {
     if (change.kind === 'rename') {
-      next[change.newUri] = next[change.oldUri]
-      delete next[change.oldUri]
+      if (next[change.oldUri] !== undefined) {
+        next[change.newUri] = next[change.oldUri]
+        delete next[change.oldUri]
+      } else {
+        // A directory rename moves every path beneath it, the way `fs.rename`
+        // does on disk.
+        for (const path of Object.keys(next)) {
+          if (!path.startsWith(`${change.oldUri}/`)) continue
+          next[`${change.newUri}${path.slice(change.oldUri.length)}`] = next[path]
+          delete next[path]
+        }
+      }
     } else if (change.kind === 'delete') {
       delete next[change.uri]
     } else if (change.kind === 'create' && next[change.uri] === undefined) {
@@ -775,9 +785,10 @@ console.log('\n-- guard rails --')
 {
   const available = R.availableRefactorings({ language: 'plaintext' }, true)
   const enabled = available.filter((entry) => entry.enabled).map((entry) => entry.descriptor.id)
+  const expected = ['rename', 'rename.file', 'rename.directory', 'move.file', 'safeDelete']
   check(
     'only text-safe refactorings are offered without a profile',
-    enabled.length === 2 && enabled.includes('move.file') && enabled.includes('safeDelete'),
+    enabled.length === expected.length && expected.every((id) => enabled.includes(id)),
     enabled.join(', '),
   )
 }
@@ -785,6 +796,261 @@ console.log('\n-- guard rails --')
   const available = R.availableRefactorings({ language: 'typescript' }, false)
   const extract = available.find((entry) => entry.descriptor.id === 'extract.variable')
   check('extract is disabled without a selection', !extract.enabled && extract.reason.includes('select'), JSON.stringify(extract))
+}
+
+console.log('\n-- rename --')
+{
+  const text = [
+    '// total is the running total',
+    'function sum(values) {',
+    '  let total = 0',
+    '  for (const v of values) total += v',
+    '  return total',
+    '}',
+  ].join('\n')
+  const files = { '/p/a.ts': text }
+  const site = caretAt('/p/a.ts', 'typescript', text, 'total', 1)
+  const preparation = await R.prepareRename(site, makeWorkspace(files))
+  check(
+    'an unindexed name is scoped to its own file',
+    preparation.ok && preparation.fileLocal && preparation.files.length === 1,
+    JSON.stringify(preparation.scopeReason ?? preparation),
+  )
+  check(
+    'comment mentions are separated from code occurrences',
+    preparation.ok && preparation.code.length === 3 && preparation.soft.length === 2,
+    preparation.ok ? `${preparation.code.length} code / ${preparation.soft.length} soft` : preparation.reason,
+  )
+
+  const result = await R.renameSymbol(site, { newName: 'runningTotal' }, makeWorkspace(files))
+  const after = applyAll(files, result)['/p/a.ts']
+  check(
+    'code occurrences are renamed and the comment is left alone',
+    after.includes('let runningTotal = 0') &&
+      after.includes('return runningTotal') &&
+      after.startsWith('// total is the running total'),
+    after,
+  )
+}
+{
+  const text = 'let flag = 1\n// flag comment\n'
+  const files = { '/p/a.ts': text }
+  const result = await R.renameSymbol(
+    caretAt('/p/a.ts', 'typescript', text, 'flag'),
+    { newName: 'enabled', searchInComments: true },
+    makeWorkspace(files),
+  )
+  const after = applyAll(files, result)['/p/a.ts']
+  check('searchInComments also rewrites the comment', after.includes('// enabled comment'), after)
+}
+{
+  const text = 'let x = 1\n'
+  const files = { '/p/a.ts': text }
+  const result = await R.renameSymbol(
+    caretAt('/p/a.ts', 'typescript', text, 'x'),
+    { newName: 'class' },
+    makeWorkspace(files),
+  )
+  check('a keyword is refused as a new name', !result.ok && result.reason.includes('keyword'), JSON.stringify(result))
+}
+{
+  const files = {
+    '/p/order.py': 'class Order:\n    pass\n',
+    '/p/main.py': 'from order import Order\n\no = Order()\n',
+  }
+  const site = caretAt('/p/order.py', 'python', files['/p/order.py'], 'Order')
+  const result = await R.renameSymbol(site, { newName: 'Purchase' }, makeWorkspace(files))
+  const after = applyAll(files, result)
+  check(
+    'an exported declaration renames across files',
+    after['/p/order.py'].includes('class Purchase') && after['/p/main.py'].includes('o = Purchase()'),
+    JSON.stringify(after),
+  )
+}
+{
+  const files = {
+    '/p/lib/util.ts': 'export const one = 1\n',
+    '/p/app.ts': "import { one } from './lib/util'\n",
+  }
+  const result = await R.renameDirectory(
+    { directory: '/p/lib', newName: 'core', root: '/p' },
+    makeWorkspace(files),
+  )
+  const after = applyAll(files, result)
+  check(
+    'renaming a directory rewrites relative imports and moves the tree',
+    after['/p/app.ts'].includes("from './core/util'") && after['/p/core/util.ts'] !== undefined,
+    JSON.stringify(after),
+  )
+}
+
+console.log('\n-- extract interface / superclass --')
+{
+  const text = [
+    'export class Repo {',
+    '  private cache: string = ""',
+    '  load(id: string): string {',
+    '    return this.cache',
+    '  }',
+    '}',
+  ].join('\n')
+  const preparation = R.prepareExtractType(caretAt('/p/a.ts', 'typescript', text, 'Repo'), 'interface')
+  check(
+    'members are read off the class',
+    preparation.ok && preparation.members.some((m) => m.name === 'load') && preparation.members.some((m) => m.name === 'cache'),
+    JSON.stringify(preparation.ok ? preparation.members.map((m) => m.name) : preparation),
+  )
+  const result = R.extractType(caretAt('/p/a.ts', 'typescript', text, 'Repo'), 'interface', {
+    name: 'Loader',
+    members: ['load'],
+    targetFile: '/p/a.ts',
+    updateDeclaration: true,
+  })
+  const after = applyAll({ '/p/a.ts': text }, result)['/p/a.ts']
+  check(
+    'the interface is written and the class conforms',
+    after.includes('export interface Loader {') &&
+      after.includes('load(id: string): string') &&
+      after.includes('class Repo implements Loader'),
+    after,
+  )
+}
+{
+  check(
+    'a Kotlin class header gains a colon conformance',
+    R.addConformance('class Repo(val a: Int) {', 'Loader', 'colon') === 'class Repo(val a: Int) : Loader {',
+    R.addConformance('class Repo(val a: Int) {', 'Loader', 'colon'),
+  )
+  check(
+    'a Python class header gains a base',
+    R.addConformance('class Repo:', 'Loader', 'python-base') === 'class Repo(Loader):',
+    R.addConformance('class Repo:', 'Loader', 'python-base'),
+  )
+}
+
+console.log('\n-- invert boolean / inline parameter / inline field --')
+{
+  const text = [
+    'function isReady(x) {',
+    '  return x > 2',
+    '}',
+    'if (isReady(a)) { run() }',
+  ].join('\n')
+  const files = { '/p/a.ts': text }
+  const result = await R.invertBoolean(
+    caretAt('/p/a.ts', 'typescript', text, 'isReady'),
+    { newName: 'isNotReady' },
+    makeWorkspace(files),
+  )
+  const after = applyAll(files, result)['/p/a.ts']
+  check(
+    'the return is negated and the call site wrapped',
+    after.includes('return x <= 2') && after.includes('function isNotReady') && after.includes('if (!isNotReady(a))'),
+    after,
+  )
+}
+{
+  check('negate flips a comparison', R.negate('a === b', 'typescript') === 'a !== b', R.negate('a === b', 'typescript'))
+  check('negate cancels a leading bang', R.negate('!ready', 'typescript') === 'ready', R.negate('!ready', 'typescript'))
+  check(
+    'negate parenthesises a compound expression',
+    R.negate('a && b', 'typescript') === '!(a && b)',
+    R.negate('a && b', 'typescript'),
+  )
+  check('negate uses `not` in Python', R.negate('a and b', 'python') === 'not (a and b)', R.negate('a and b', 'python'))
+}
+{
+  const text = ['function greet(name, loud) {', '  return name', '}', 'greet("a", true)', 'greet("b", true)'].join('\n')
+  const files = { '/p/a.ts': text }
+  const preparation = await R.prepareInlineParameter(
+    caretAt('/p/a.ts', 'typescript', text, 'loud'),
+    makeWorkspace(files),
+  )
+  check(
+    'agreeing call sites are detected',
+    preparation.ok && preparation.value === 'true' && preparation.callSiteCount === 2,
+    JSON.stringify(preparation),
+  )
+  const result = await R.inlineParameter(caretAt('/p/a.ts', 'typescript', text, 'loud'), makeWorkspace(files))
+  const after = applyAll(files, result)['/p/a.ts']
+  check(
+    'the parameter becomes a local and vanishes from call sites',
+    after.includes('function greet(name)') && after.includes('const loud = true') && after.includes('greet("a")'),
+    after,
+  )
+}
+{
+  const text = ['function greet(name, loud) {', '  return name', '}', 'greet("a", true)', 'greet("b", false)'].join('\n')
+  const preparation = await R.prepareInlineParameter(
+    caretAt('/p/a.ts', 'typescript', text, 'loud'),
+    makeWorkspace({ '/p/a.ts': text }),
+  )
+  check(
+    'disagreeing call sites are refused',
+    !preparation.ok && preparation.reason.includes('different values'),
+    JSON.stringify(preparation),
+  )
+}
+{
+  const text = ['class C {', '  private limit = 10', '  check(n) {', '    return n < this.limit', '  }', '}'].join('\n')
+  const result = R.inlineField(caretAt('/p/a.ts', 'typescript', text, 'limit'))
+  const after = applyAll({ '/p/a.ts': text }, result)['/p/a.ts']
+  check('the field value replaces its reads', after.includes('return n < 10') && !after.includes('private limit'), after)
+}
+
+console.log('\n-- encapsulate field --')
+{
+  const text = ['class C {', '  count: number = 0', '  bump() {', '    this.count = this.count + 1', '  }', '}'].join('\n')
+  const preparation = await R.prepareEncapsulateField(
+    caretAt('/p/a.ts', 'typescript', text, 'count'),
+    makeWorkspace({ '/p/a.ts': text }),
+  )
+  check(
+    'reads and writes are counted',
+    preparation.ok && preparation.reads === 1 && preparation.writes === 1,
+    JSON.stringify(preparation),
+  )
+  const result = R.encapsulateField(caretAt('/p/a.ts', 'typescript', text, 'count'), {
+    getterName: 'getCount',
+    setterName: 'setCount',
+    generateSetter: true,
+    updateAccesses: true,
+  })
+  const after = applyAll({ '/p/a.ts': text }, result)['/p/a.ts']
+  check(
+    'accessors are generated and accesses rewritten',
+    after.includes('getCount()') && after.includes('setCount(') && after.includes('private count'),
+    after,
+  )
+}
+
+console.log('\n-- convert anonymous to inner --')
+{
+  const text = [
+    'class Outer {',
+    '  run() {',
+    '    exec(new Runnable() {',
+    '      public void go() { work(); }',
+    '    });',
+    '  }',
+    '}',
+  ].join('\n')
+  const preparation = R.prepareConvertAnonymous(caretAt('/p/A.java', 'java', text, 'public void go'))
+  check(
+    'the anonymous class is located',
+    preparation.ok && preparation.typeName === 'Runnable',
+    JSON.stringify(preparation),
+  )
+  const result = R.convertAnonymousToInner(caretAt('/p/A.java', 'java', text, 'public void go'), {
+    name: 'GoRunner',
+    nested: true,
+  })
+  const after = applyAll({ '/p/A.java': text }, result)['/p/A.java']
+  check(
+    'a named inner class replaces it',
+    after.includes('class GoRunner extends Runnable') && after.includes('exec(new GoRunner());'),
+    after,
+  )
 }
 
 console.log(`\nrefactor: ${passed}/${passed + failed} passed`)

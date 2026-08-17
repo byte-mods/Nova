@@ -15,6 +15,7 @@ import { basename } from '@/lib/paths'
 
 export default function TestsView() {
   const run = useStore((s) => s.testRun)
+  const history = useStore((s) => s.testHistory)
   const frameworks = useStore((s) => s.testFrameworks)
   const activeTab = useStore((s) => s.tabs.find((t) => t.id === s.activeTabId))
   const [showOutput, setShowOutput] = useState(false)
@@ -79,6 +80,44 @@ export default function TestsView() {
           <button className="btn sm" onClick={() => void useStore.getState().cancelTests()}>
             <Square size={11} /> Stop
           </button>
+        )}
+        {!run?.running && totals.failed > 0 && (
+          <button
+            className="btn sm"
+            title="Rerun only the tests that failed"
+            onClick={() => void useStore.getState().rerunFailedTests()}
+          >
+            <Play size={11} style={{ color: 'var(--danger)' }} /> Rerun failed
+          </button>
+        )}
+        <button
+          className="btn sm"
+          disabled={run?.running}
+          title="Run all with the framework's coverage flags, then load the report"
+          onClick={() => void useStore.getState().runTests({ kind: 'all' }, undefined, { coverage: true })}
+        >
+          <Play size={11} /> With coverage
+        </button>
+        {history.length > 0 && (
+          <select
+            className="select"
+            style={{ maxWidth: 170, fontSize: 11 }}
+            value={run?.runId ?? ''}
+            title="Previous runs this session"
+            onChange={(e) => useStore.getState().showTestRun(e.target.value)}
+          >
+            {run && !history.some((h) => h.runId === run.runId) && (
+              <option value={run.runId}>current run</option>
+            )}
+            {history.map((entry) => {
+              const failed = entry.cases.filter((c) => c.status === 'fail').length
+              return (
+                <option key={entry.runId} value={entry.runId}>
+                  {entry.framework} · {entry.cases.length} tests{failed ? ` · ${failed} failed` : ''}
+                </option>
+              )
+            })}
+          </select>
         )}
 
         {frameworks.length > 1 && (

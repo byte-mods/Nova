@@ -25,8 +25,8 @@ import {
 const ZERO_RANGE = { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } }
 
 /** Languages whose imports this engine can recompute. */
-const RELATIVE_IMPORTS = new Set(['typescript', 'typescriptreact', 'javascript', 'javascriptreact'])
-const DOTTED_IMPORTS = new Set(['python'])
+export const RELATIVE_IMPORTS = new Set(['typescript', 'typescriptreact', 'javascript', 'javascriptreact'])
+export const DOTTED_IMPORTS = new Set(['python'])
 
 /* ---------------- path arithmetic ---------------- */
 
@@ -57,7 +57,7 @@ export function relativeSpecifier(fromDir: string, toFile: string): string {
   return parts.join('/')
 }
 
-function stripExtension(path: string) {
+export function stripExtension(path: string) {
   return path.replace(/\.(tsx?|jsx?|mts|cts|mjs|cjs)$/, '')
 }
 
@@ -69,12 +69,12 @@ function stripExtension(path: string) {
  * it came from the index (resolved) or from a dialog (as typed). Comparing
  * those literally silently skips every import rewrite.
  */
-function canonical(path: string): string {
+export function canonical(path: string): string {
   return path.replace(/^\/private(\/(?:var|tmp|etc)\/)/, '$1')
 }
 
 /** Does `specifier`, resolved from `fromFile`, point at `target`? */
-function specifierPointsAt(fromFile: string, specifier: string, target: string): boolean {
+export function specifierPointsAt(fromFile: string, specifier: string, target: string): boolean {
   if (!specifier.startsWith('.')) return false
   const resolved = canonical(normalize(joinPath(dirname(fromFile), specifier)))
   const full = canonical(target)
@@ -94,14 +94,14 @@ const SPECIFIER_PATTERNS = [
   /\bimport\s*\(\s*(['"])([^'"]+)\1\s*\)/g,
 ]
 
-interface Specifier {
+export interface Specifier {
   value: string
   /** Offsets of the specifier text itself, without the quotes. */
   start: number
   end: number
 }
 
-function specifiersIn(text: string): Specifier[] {
+export function specifiersIn(text: string): Specifier[] {
   const found: Specifier[] = []
   for (const pattern of SPECIFIER_PATTERNS) {
     pattern.lastIndex = 0
@@ -245,7 +245,7 @@ async function rewriteRelativeImports(
 }
 
 /** Keeps an explicit `.js`/`.ts` suffix if the original specifier had one. */
-function preserveExtension(original: string, next: string): string {
+export function preserveExtension(original: string, next: string): string {
   const suffix = /\.(tsx?|jsx?|mts|cts|mjs|cjs)$/.exec(original)
   if (!suffix) return stripExtension(next)
   return `${stripExtension(next)}${suffix[0]}`
@@ -289,7 +289,7 @@ async function rewriteDottedImports(
   return { changes, warnings }
 }
 
-function positionIn(text: string, offset: number) {
+export function positionIn(text: string, offset: number) {
   let line = 0
   let last = 0
   for (let i = 0; i < offset; i++) {

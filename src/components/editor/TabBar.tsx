@@ -1,12 +1,15 @@
 import { useState } from 'react'
 import {
   BookOpen,
+  ChevronDown,
   Columns2,
   GitCommitHorizontal,
   Globe,
+  GraduationCap,
   History,
   Loader2,
   Pin,
+  Send,
   Settings,
   Shapes,
   SplitSquareHorizontal,
@@ -15,6 +18,7 @@ import {
 import { useStore, type GroupId, type Tab } from '@/state/store'
 import { fileIcon } from '@/lib/fileIcons'
 import { isImage } from '@/lib/language'
+import { TUTORIAL_CHAPTERS } from '@/lib/tutorial'
 import ContextMenu, { type MenuEntry } from '@/components/ContextMenu'
 
 /**
@@ -135,14 +139,56 @@ export default function TabBar({ group }: { group: GroupId }) {
         )
       })}
 
-      <SplitButton group={group} />
-      <ExplainButton group={group} />
+      <div className="tab-actions">
+        <HttpButton group={group} />
+        <SplitButton group={group} />
+        <ExplainButton group={group} />
+        {group === 'main' && <TutorialButton />}
+      </div>
 
       {menu && (
         <ContextMenu x={menu.x} y={menu.y} entries={menu.entries} onClose={() => setMenu(null)} />
       )}
     </div>
   )
+}
+
+/**
+ * Opens the HTTP client for a `.http` file.
+ *
+ * The file itself stays in a normal editor tab — you write requests as text —
+ * and the client opens beside it rather than replacing the buffer, so editing a
+ * request and re-running it does not mean switching modes.
+ */
+function HttpButton({ group }: { group: GroupId }) {
+  const tabs = useStore((s) => s.tabs)
+  const activeTabId = useStore((s) => s.groupActive[group])
+
+  const active = tabs.find((t) => t.id === activeTabId)
+  const path = active?.kind === 'file' && active.path && isHttpFile(active.path) ? active.path : null
+  if (!path) return null
+
+  return (
+    <button
+      className="tab-action"
+      title="Open the HTTP client for this file"
+      onClick={() =>
+        useStore.getState().openTab({
+          id: `http:${path}`,
+          kind: 'http',
+          title: `${path.split('/').pop()} — requests`,
+          path,
+        })
+      }
+    >
+      <Send size={12} />
+      <span>Requests</span>
+    </button>
+  )
+}
+
+export function isHttpFile(path: string): boolean {
+  return /\.(http|rest)$/i.test(path)
 }
 
 function SplitButton({ group }: { group: GroupId }) {
@@ -152,7 +198,6 @@ function SplitButton({ group }: { group: GroupId }) {
   return (
     <button
       className="tab-action tab-action-split"
-      style={{ marginLeft: 'auto', marginRight: 0 }}
       title={split ? 'Close the split' : 'Split editor right (⌥⌘→)'}
       onClick={() => (split ? useStore.getState().closeSplit() : useStore.getState().splitEditor())}
     >
@@ -186,7 +231,6 @@ function ExplainButton({ group }: { group: GroupId }) {
   return (
     <button
       className={`tab-action tab-action-explain ${running ? 'busy' : ''}`}
-      style={{ marginLeft: 0 }}
       disabled={!target}
       title={
         target
@@ -217,6 +261,104 @@ function ExplainButton({ group }: { group: GroupId }) {
   )
 }
 
+/**
+ * "Tutorial" — generates the technical walkthrough of the whole project:
+ * libraries, architecture, patterns, algorithms, data, flows and pipeline.
+ *
+ * It sits beside Explain because the two are the same gesture at two scales, and
+ * it is project-scoped rather than file-scoped, so it is enabled whenever a
+ * project is open — including on the welcome screen, where a newcomer to a
+ * codebase is most likely to want it.
+ *
+ * The chevron exists because the two CLIs write materially different documents
+ * from the same repository. Picking one in Settings for ever is the wrong shape
+ * for a task you may want to run twice and compare, so the provider is a
+ * per-run choice here rather than a setting.
+ */
+function TutorialButton() {
+  const root = useStore((s) => s.root)
+  const tutorial = useStore((s) => s.tutorial)
+  const providers = useStore((s) => s.providers)
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
+
+  const running = tutorial?.status === 'running'
+
+  const open = () => {
+    const store = useStore.getState()
+    // Already generated: bring the tab forward rather than paying for it twice.
+    if (store.tutorial) {
+      store.openTab({
+        id: 'tutorial',
+        kind: 'tutorial',
+        title: `${root?.split('/').pop() ?? 'Project'} — tutorial`,
+      })
+      return
+    }
+    void store.generateTutorial('book')
+  }
+
+  return (
+    <>
+      <button
+        className={`tab-action tab-action-tutorial ${running ? 'busy' : ''}`}
+        disabled={!root}
+        title={
+          root
+            ? tutorial
+              ? 'Open the generated project tutorial'
+              : 'Generate a technical walkthrough of this project — libraries, architecture, patterns, algorithms, data and flows'
+            : 'Open a project to generate its tutorial'
+        }
+        onClick={open}
+      >
+        {running ? <Loader2 size={12} className="spin" /> : <GraduationCap size={12} />}
+        <span>Tutorial</span>
+      </button>
+      <button
+        className={`tab-action tab-action-chevron ${running ? 'busy' : ''}`}
+        disabled={!root || running}
+        title="Choose which assistant writes it, and which chapter"
+        onClick={(e) => {
+          const rect = e.currentTarget.getBoundingClientRect()
+          setMenu({ x: rect.right - 250, y: rect.bottom + 2 })
+        }}
+      >
+        <ChevronDown size={12} />
+      </button>
+
+      {menu && (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          onClose={() => setMenu(null)}
+          entries={[
+            ...providers.map((provider) => ({
+              id: `provider:${provider.id}`,
+              label: provider.available
+                ? `Write it with ${provider.label}`
+                : `${provider.label} — not installed`,
+              Icon: GraduationCap,
+              onSelect: () => {
+                if (!provider.available) {
+                  useStore.getState().notify(`${provider.label} — ${provider.hint}`, 'error')
+                  return
+                }
+                void useStore.getState().generateTutorial('book', provider.id)
+              },
+            })),
+            { id: 'sep', separator: true },
+            ...TUTORIAL_CHAPTERS.filter((chapter) => chapter.id !== 'book').map((chapter) => ({
+              id: `chapter:${chapter.id}`,
+              label: `Just: ${chapter.short}`,
+              onSelect: () => void useStore.getState().generateTutorial(chapter.id),
+            })),
+          ]}
+        />
+      )}
+    </>
+  )
+}
+
 function TabIcon({ tab, iconPack }: { tab: Tab; iconPack: 'nova' | 'classic' | 'minimal' }) {
   if (tab.kind === 'browser') return <Globe size={13} style={{ color: '#7dcfff' }} />
   if (tab.kind === 'diagram') return <Shapes size={13} style={{ color: 'var(--accent)' }} />
@@ -224,6 +366,8 @@ function TabIcon({ tab, iconPack }: { tab: Tab; iconPack: 'nova' | 'classic' | '
   if (tab.kind === 'commit') return <GitCommitHorizontal size={13} style={{ color: 'var(--accent)' }} />
   if (tab.kind === 'history') return <History size={13} style={{ color: 'var(--accent)' }} />
   if (tab.kind === 'explain') return <BookOpen size={13} style={{ color: 'var(--accent)' }} />
+  if (tab.kind === 'tutorial') return <GraduationCap size={13} style={{ color: 'var(--accent)' }} />
+  if (tab.kind === 'http') return <Send size={13} style={{ color: 'var(--accent)' }} />
   if (tab.kind === 'settings') return <Settings size={13} className="faint" />
   const { Icon, color } = fileIcon(tab.path ?? tab.title, iconPack)
   return <Icon size={13} style={{ color, flexShrink: 0 }} />

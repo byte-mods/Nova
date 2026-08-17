@@ -1,5 +1,11 @@
 import { ipcMain } from 'electron'
-import { detectRunConfigs, writeSampleRunConfig } from '../lib/runConfigs'
+import {
+  detectRunConfigs,
+  readRunConfigEntries,
+  writeRunConfigEntries,
+  writeSampleRunConfig,
+} from '../lib/runConfigs'
+import type { RunConfigEntry } from '../../shared/types'
 import { hasPty, loadPty, ptyUnavailableReason, type PtyProcess } from '../lib/pty'
 import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs/promises'
@@ -184,6 +190,10 @@ export function registerShellHandlers(ctx: Ctx) {
 
   ipcMain.handle('shell:runConfigs', (_e, root: string) => detectRunConfigs(root))
   ipcMain.handle('shell:createRunConfig', (_e, root: string) => writeSampleRunConfig(root))
+  ipcMain.handle('shell:runConfigEntries', (_e, root: string) => readRunConfigEntries(root))
+  ipcMain.handle('shell:saveRunConfigEntries', (_e, root: string, entries: RunConfigEntry[]) =>
+    writeRunConfigEntries(root, entries),
+  )
 
   ipcMain.handle('shell:detectDevServer', async (_e, root: string) => {
     try {

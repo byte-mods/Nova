@@ -13,10 +13,14 @@ import RefactorPreview from '@/components/RefactorPreview'
 import RefactorDialog from '@/components/RefactorDialog'
 import RefactorMenu from '@/components/RefactorMenu'
 import BreakpointDialog from '@/components/BreakpointDialog'
+import RebaseDialog from '@/components/RebaseDialog'
 import Splitter from '@/components/Splitter'
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts'
 import { useWatchers } from '@/hooks/useWatchers'
 import { useExplainEvents } from '@/hooks/useExplainEvents'
+import { usePluginEvents, usePluginWorkspaceRoot } from '@/hooks/usePluginEvents'
+import { useInspections } from '@/hooks/useInspections'
+import { useTemplates } from '@/hooks/useTemplates'
 
 export default function App() {
   const ready = useStore((s) => s.ready)
@@ -34,6 +38,10 @@ export default function App() {
   useKeyboardShortcuts()
   useWatchers()
   useExplainEvents()
+  usePluginEvents()
+  useInspections()
+  useTemplates()
+  usePluginWorkspaceRoot(useStore((s) => s.root))
 
   if (!ready) {
     return (
@@ -92,6 +100,7 @@ export default function App() {
       <StatusBar />
       <CommandPalette />
       <BreakpointDialog />
+      <RebaseDialog />
       <RefactorMenu />
       <RefactorDialog />
       <RefactorPreview />

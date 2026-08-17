@@ -5,6 +5,10 @@ import {
   Bug,
   FlaskConical,
   ListTodo,
+  ShieldCheck,
+  Hammer,
+  Flame,
+  Container,
   Network,
   Plus,
   Target,
@@ -20,6 +24,10 @@ import UsagesView from './UsagesView'
 import HierarchyView from './HierarchyView'
 import TestsView from './TestsView'
 import DebugView from './DebugView'
+import CoverageView from './CoverageView'
+import BuildView from './BuildView'
+import ProfileView from './ProfileView'
+import InfraView from './InfraView'
 
 export default function BottomPanel() {
   const height = useStore((s) => s.settings.panelHeight)
@@ -27,11 +35,15 @@ export default function BottomPanel() {
   const usages = useStore((s) => s.usages)
   const testRun = useStore((s) => s.testRun)
   const debugStatus = useStore((s) => s.debug.state?.status)
+  const coverage = useStore((s) => s.coverage)
   const [terminals, setTerminals] = useState<string[]>(['term-1'])
   const [activeTerminal, setActiveTerminal] = useState('term-1')
 
   const usageCount = usages?.references.length ?? 0
   const testFailures = testRun?.cases.filter((c) => c.status === 'fail').length ?? 0
+  const coveragePct = coverage
+    ? Math.round((coverage.totals.coveredLines / Math.max(coverage.totals.totalLines, 1)) * 100)
+    : null
 
   return (
     <div className="pane" style={{ height }}>
@@ -76,6 +88,38 @@ export default function BottomPanel() {
               <span className="chip" style={{ height: 15, color: 'var(--warning)' }}>
                 {debugStatus}
               </span>
+            )}
+          </button>
+          <button
+            className={`pane-tab ${panelTab === 'infra' ? 'active' : ''}`}
+            onClick={() => useStore.getState().togglePanel('infra')}
+          >
+            <Container size={12} /> Infra
+          </button>
+          <button
+            className={`pane-tab ${panelTab === 'profile' ? 'active' : ''}`}
+            onClick={() => useStore.getState().togglePanel('profile')}
+          >
+            <Flame size={12} /> Profiler
+          </button>
+          <button
+            className={`pane-tab ${panelTab === 'build' ? 'active' : ''}`}
+            onClick={() => useStore.getState().togglePanel('build')}
+          >
+            <Hammer size={12} /> Build
+          </button>
+          <button
+            className={`pane-tab ${panelTab === 'coverage' ? 'active' : ''}`}
+            onClick={() => {
+              useStore.getState().togglePanel('coverage')
+              // Loading on open means the panel is never showing a stale report
+              // from a run three commits ago without the user asking for it.
+              if (!useStore.getState().coverage) void useStore.getState().loadCoverage()
+            }}
+          >
+            <ShieldCheck size={12} /> Coverage
+            {coveragePct !== null && (
+              <span className="chip" style={{ height: 15 }}>{coveragePct}%</span>
             )}
           </button>
           <button
@@ -166,6 +210,10 @@ export default function BottomPanel() {
         {panelTab === 'hierarchy' && <HierarchyView />}
         {panelTab === 'tests' && <TestsView />}
         {panelTab === 'debug' && <DebugView />}
+        {panelTab === 'build' && <BuildView />}
+        {panelTab === 'profile' && <ProfileView />}
+        {panelTab === 'infra' && <InfraView />}
+        {panelTab === 'coverage' && <CoverageView />}
         {panelTab === 'problems' && <ProblemsView />}
         {panelTab === 'todo' && <TodoView />}
       </div>

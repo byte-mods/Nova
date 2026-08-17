@@ -43,6 +43,8 @@ export default function BrowserPane({ tabId, initialUrl }: { tabId: string; init
   const [currentUrl, setCurrentUrl] = useState(initialUrl)
   const [loading, setLoading] = useState(false)
   const [failure, setFailure] = useState('')
+  /** The address that failed, which is not `currentUrl` — see `onFail`. */
+  const [failedUrl, setFailedUrl] = useState('')
   const [device, setDevice] = useState<Device>('responsive')
   const [zoom, setZoom] = useState(1)
   const root = useStore((s) => s.root)
@@ -55,6 +57,7 @@ export default function BrowserPane({ tabId, initialUrl }: { tabId: string; init
     const onStart = () => {
       setLoading(true)
       setFailure('')
+      setFailedUrl('')
     }
     const onStop = () => setLoading(false)
     const onNavigate = (e: Event) => {
@@ -72,9 +75,18 @@ export default function BrowserPane({ tabId, initialUrl }: { tabId: string; init
       })
     }
     const onFail = (e: Event) => {
-      const detail = e as unknown as { errorCode: number; errorDescription: string; isMainFrame: boolean }
+      const detail = e as unknown as {
+        errorCode: number
+        errorDescription: string
+        isMainFrame: boolean
+        validatedURL: string
+      }
       if (detail.isMainFrame && detail.errorCode !== -3) {
         setFailure(detail.errorDescription || `Failed to load (${detail.errorCode})`)
+        // `did-navigate` never fires for a load that failed, so `currentUrl`
+        // still holds the last page that worked. Naming *that* in the error
+        // would tell the user the wrong address is broken.
+        if (detail.validatedURL) setFailedUrl(detail.validatedURL)
         setLoading(false)
       }
     }
@@ -108,6 +120,7 @@ export default function BrowserPane({ tabId, initialUrl }: { tabId: string; init
         : `https://duckduckgo.com/?q=${encodeURIComponent(url)}`
     }
     setFailure('')
+    setFailedUrl('')
     void view.loadURL(url)
   }, [])
 
@@ -248,7 +261,7 @@ export default function BrowserPane({ tabId, initialUrl }: { tabId: string; init
         >
           {failure && (
             <div className="browser-error">
-              <b>Could not load {currentUrl}</b>
+              <b>Could not load {failedUrl || currentUrl}</b>
               <span className="faint">{failure}</span>
               <div className="row" style={{ marginTop: 10 }}>
                 <button className="btn sm" onClick={() => viewRef.current?.reload()}>

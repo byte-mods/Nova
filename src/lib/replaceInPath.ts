@@ -45,7 +45,16 @@ export function matchesMask(path: string, mask: string): boolean {
 
 export function applyMask(hits: SearchHit[], mask: string): SearchHit[] {
   if (!mask.trim()) return hits
-  return hits.filter((hit) => matchesMask(hit.path, mask))
+  // `!pattern` entries exclude; the rest include. An all-exclude mask keeps
+  // everything the exclusions do not reject.
+  const parts = mask.split(',').map((part) => part.trim()).filter(Boolean)
+  const includes = parts.filter((part) => !part.startsWith('!')).join(',')
+  const excludes = parts.filter((part) => part.startsWith('!')).map((part) => part.slice(1)).join(',')
+  return hits.filter(
+    (hit) =>
+      (!includes || matchesMask(hit.path, includes)) &&
+      (!excludes || !matchesMask(hit.path, excludes)),
+  )
 }
 
 /** Reads each affected file and computes every replacement in it. */

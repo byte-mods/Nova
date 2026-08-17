@@ -1,8 +1,11 @@
 import { ipcMain } from 'electron'
 import { execFile } from 'node:child_process'
+import fsp from 'node:fs/promises'
+import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import type {
+  Changelist,
   GitBlameLine,
   GitBranch,
   GitChange,
@@ -10,9 +13,17 @@ import type {
   GitFileStatus,
   GitStashEntry,
   GitStatus,
+  MergeStages,
+  RebaseStep,
+  ShelfEntry,
 } from '../../shared/types'
 
 const exec = promisify(execFile)
+
+/** Single-quotes a value for a `sh -c` fragment inside a rebase todo. */
+function shellQuote(value: string) {
+  return `'${value.replace(/'/g, `'\\''`)}'`
+}
 
 async function git(cwd: string, args: string[]) {
   const { stdout } = await exec('git', args, {
@@ -149,9 +160,12 @@ export function registerGitHandlers() {
   ipcMain.handle(
     'git:log',
     async (_e, cwd: string, limit = 200, branch?: string): Promise<GitCommit[]> => {
-      const format = ['%H', '%h', '%s', '%b', '%an', '%ae', '%at', '%D'].join(LOG_FIELD) + LOG_SEP
+      // `%P` carries the parent hashes, which is what lets the renderer draw a
+      // graph instead of a flat list.
+      const format = ['%H', '%h', '%s', '%b', '%an', '%ae', '%at', '%D', '%P'].join(LOG_FIELD) + LOG_SEP
       const args = ['log', `--max-count=${limit}`, `--format=${format}`]
       if (branch) args.push(branch)
+      else args.push('--all')
       const res = await gitSafe(cwd, args)
       if (!res.ok) return []
       return res.out
@@ -159,7 +173,8 @@ export function registerGitHandlers() {
         .map((chunk) => chunk.replace(/^\n/, ''))
         .filter((chunk) => chunk.trim().length > 0)
         .map((chunk) => {
-          const [hash, shortHash, subject, body, author, email, date, refs] = chunk.split(LOG_FIELD)
+          const [hash, shortHash, subject, body, author, email, date, refs, parents] =
+            chunk.split(LOG_FIELD)
           return {
             hash,
             shortHash,
@@ -169,6 +184,7 @@ export function registerGitHandlers() {
             email,
             date: Number(date) || 0,
             refs: refs ?? '',
+            parents: (parents ?? '').trim().split(/\s+/).filter(Boolean),
           }
         })
     },
@@ -381,4 +397,268 @@ export function registerGitHandlers() {
   )
 
   ipcMain.handle('git:raw', (_e, cwd: string, args: string[]) => gitSafe(cwd, args))
+
+  /* ---------------- merge conflicts ---------------- */
+
+  ipcMain.handle('git:conflicts', async (_e, cwd: string): Promise<string[]> => {
+    const res = await gitSafe(cwd, ['diff', '--name-only', '--diff-filter=U'])
+    if (!res.ok) return []
+    return res.out.split('\n').filter(Boolean).map((rel) => path.join(cwd, rel))
+  })
+
+  /**
+   * The three sides of a conflict.
+   *
+   * Git keeps them in the index at stages 1/2/3 for exactly this purpose, so a
+   * three-way merge needs no re-running of the merge and no guessing from the
+   * conflict markers in the working tree.
+   */
+  ipcMain.handle('git:mergeStages', async (_e, cwd: string, file: string): Promise<MergeStages> => {
+    const rel = path.relative(cwd, file) || file
+    const [base, ours, theirs] = await Promise.all([
+      gitSafe(cwd, ['show', `:1:${rel}`]),
+      gitSafe(cwd, ['show', `:2:${rel}`]),
+      gitSafe(cwd, ['show', `:3:${rel}`]),
+    ])
+    let merged = ''
+    try {
+      merged = await fsp.readFile(file, 'utf8')
+    } catch {
+      /* the file may only exist on one side */
+    }
+    return {
+      base: base.ok ? base.out : '',
+      ours: ours.ok ? ours.out : '',
+      theirs: theirs.ok ? theirs.out : '',
+      merged,
+    }
+  })
+
+  /** Writes the resolved text and marks the path resolved. */
+  ipcMain.handle('git:resolve', async (_e, cwd: string, file: string, content: string) => {
+    await fsp.writeFile(file, content, 'utf8')
+    return gitSafe(cwd, ['add', '--', path.relative(cwd, file)])
+  })
+
+  /* ---------------- shelve ---------------- */
+
+  const shelfDir = (cwd: string) => path.join(cwd, '.nova', 'shelf')
+
+  ipcMain.handle('git:shelfList', async (_e, cwd: string): Promise<ShelfEntry[]> => {
+    try {
+      const names = await fsp.readdir(shelfDir(cwd))
+      const entries = await Promise.all(
+        names
+          .filter((name) => name.endsWith('.json'))
+          .map(async (name) => {
+            const raw = await fsp.readFile(path.join(shelfDir(cwd), name), 'utf8')
+            return JSON.parse(raw) as ShelfEntry
+          }),
+      )
+      return entries.sort((a, b) => b.createdAt - a.createdAt)
+    } catch {
+      return []
+    }
+  })
+
+  /**
+   * Shelve: save a patch of the given files and take them back to HEAD.
+   *
+   * A patch on disk rather than a stash entry, because a stash is a commit on a
+   * hidden ref that a `git stash pop` can only replay in order — a shelf is a
+   * file you can apply whenever, in any order, on any branch.
+   */
+  ipcMain.handle(
+    'git:shelve',
+    async (_e, cwd: string, name: string, files: string[], revert: boolean) => {
+      const relatives = files.map((f) => path.relative(cwd, f))
+      if (relatives.length === 0) return { ok: false, out: 'Nothing selected to shelve.' }
+      // Untracked files have no diff against HEAD; add them to the index first
+      // so `git diff --cached` can see them, then take them back out.
+      const untracked: string[] = []
+      for (const rel of relatives) {
+        const tracked = await gitSafe(cwd, ['ls-files', '--error-unmatch', '--', rel])
+        if (!tracked.ok) untracked.push(rel)
+      }
+      if (untracked.length) await gitSafe(cwd, ['add', '--intent-to-add', '--', ...untracked])
+
+      const diff = await gitSafe(cwd, ['diff', 'HEAD', '--binary', '--', ...relatives])
+      if (!diff.ok || !diff.out.trim()) {
+        return { ok: false, out: 'Those files have no changes against HEAD.' }
+      }
+
+      const id = `shelf_${Date.now().toString(36)}`
+      await fsp.mkdir(shelfDir(cwd), { recursive: true })
+      await fsp.writeFile(path.join(shelfDir(cwd), `${id}.patch`), diff.out, 'utf8')
+      const entry: ShelfEntry = {
+        id,
+        name: name.trim() || `Shelved ${new Date().toISOString().slice(0, 16).replace('T', ' ')}`,
+        createdAt: Date.now(),
+        files,
+        size: diff.out.length,
+      }
+      await fsp.writeFile(path.join(shelfDir(cwd), `${id}.json`), JSON.stringify(entry, null, 2))
+
+      if (revert) {
+        await gitSafe(cwd, ['restore', '--staged', '--worktree', '--', ...relatives])
+        for (const rel of untracked) await gitSafe(cwd, ['clean', '-fd', '--', rel])
+      }
+      return { ok: true, out: entry.id }
+    },
+  )
+
+  ipcMain.handle('git:unshelve', async (_e, cwd: string, id: string, drop: boolean) => {
+    const patch = path.join(shelfDir(cwd), `${id}.patch`)
+    const applied = await gitSafe(cwd, ['apply', '--3way', patch])
+    if (!applied.ok) return applied
+    if (drop) {
+      await fsp.rm(patch, { force: true })
+      await fsp.rm(path.join(shelfDir(cwd), `${id}.json`), { force: true })
+    }
+    return { ok: true, out: 'Unshelved.' }
+  })
+
+  ipcMain.handle('git:shelfDrop', async (_e, cwd: string, id: string) => {
+    await fsp.rm(path.join(shelfDir(cwd), `${id}.patch`), { force: true })
+    await fsp.rm(path.join(shelfDir(cwd), `${id}.json`), { force: true })
+    return { ok: true, out: 'Deleted.' }
+  })
+
+  ipcMain.handle('git:shelfPatch', async (_e, cwd: string, id: string) => {
+    try {
+      return await fsp.readFile(path.join(shelfDir(cwd), `${id}.patch`), 'utf8')
+    } catch {
+      return ''
+    }
+  })
+
+  /* ---------------- changelists ---------------- */
+
+  const changelistFile = (cwd: string) => path.join(cwd, '.nova', 'changelists.json')
+
+  ipcMain.handle('git:changelists', async (_e, cwd: string): Promise<Changelist[]> => {
+    try {
+      return JSON.parse(await fsp.readFile(changelistFile(cwd), 'utf8')) as Changelist[]
+    } catch {
+      return []
+    }
+  })
+
+  ipcMain.handle('git:saveChangelists', async (_e, cwd: string, lists: Changelist[]) => {
+    await fsp.mkdir(path.dirname(changelistFile(cwd)), { recursive: true })
+    await fsp.writeFile(changelistFile(cwd), JSON.stringify(lists, null, 2))
+  })
+
+  /* ---------------- interactive rebase ---------------- */
+
+  ipcMain.handle(
+    'git:rebaseTodo',
+    async (_e, cwd: string, onto: string): Promise<RebaseStep[]> => {
+      const format = ['%H', '%h', '%s'].join(LOG_FIELD) + LOG_SEP
+      const res = await gitSafe(cwd, ['log', `--format=${format}`, `${onto}..HEAD`])
+      if (!res.ok) return []
+      return res.out
+        .split(LOG_SEP)
+        .map((chunk) => chunk.replace(/^\n/, ''))
+        .filter((chunk) => chunk.trim())
+        .map((chunk) => {
+          const [hash, shortHash, subject] = chunk.split(LOG_FIELD)
+          return { hash, shortHash, subject, action: 'pick' as const }
+        })
+    },
+  )
+
+  /**
+   * Runs an interactive rebase without an interactive editor.
+   *
+   * `GIT_SEQUENCE_EDITOR` is pointed at a `cp` of the todo Nova built, so git
+   * gets exactly the plan the user assembled in the UI. Rewording is expressed
+   * as `pick` followed by `exec git commit --amend`, which avoids needing a
+   * message editor at all — the message is already known.
+   */
+  ipcMain.handle(
+    'git:rebaseRun',
+    async (_e, cwd: string, onto: string, steps: RebaseStep[]) => {
+      if (steps.length === 0) return { ok: false, out: 'Nothing to rebase.' }
+      const lines: string[] = []
+      // Git's todo runs oldest-first; the UI shows newest-first, like the log.
+      for (const step of [...steps].reverse()) {
+        if (step.action === 'drop') {
+          lines.push(`drop ${step.hash} ${step.subject}`)
+          continue
+        }
+        if (step.action === 'reword') {
+          lines.push(`pick ${step.hash} ${step.subject}`)
+          lines.push(`exec git commit --amend -m ${shellQuote(step.message ?? step.subject)}`)
+          continue
+        }
+        lines.push(`${step.action} ${step.hash} ${step.subject}`)
+      }
+
+      const todo = path.join(os.tmpdir(), `nova-rebase-${Date.now()}.txt`)
+      await fsp.writeFile(todo, `${lines.join('\n')}\n`, 'utf8')
+      try {
+        const { stdout, stderr } = await exec('git', ['rebase', '-i', '--autostash', onto], {
+          cwd,
+          maxBuffer: 64 * 1024 * 1024,
+          env: {
+            ...process.env,
+            GIT_OPTIONAL_LOCKS: '0',
+            GIT_SEQUENCE_EDITOR: `cp ${JSON.stringify(todo)}`,
+            // Squash and fixup would otherwise open an editor for the combined
+            // message; taking the default keeps the run non-interactive.
+            GIT_EDITOR: 'true',
+          },
+        })
+        return { ok: true, out: `${stdout}${stderr}` }
+      } catch (err) {
+        const e = err as { stdout?: string; stderr?: string; message?: string }
+        return { ok: false, out: e.stderr || e.stdout || e.message || 'rebase failed' }
+      } finally {
+        await fsp.rm(todo, { force: true })
+      }
+    },
+  )
+
+  ipcMain.handle('git:rebaseAbort', (_e, cwd: string) => gitSafe(cwd, ['rebase', '--abort']))
+  ipcMain.handle('git:rebaseContinue', (_e, cwd: string) => gitSafe(cwd, ['rebase', '--continue']))
+
+  /* ---------------- history for selection ---------------- */
+
+  /**
+   * `git log -L` — the history of one *range of lines*, following it through
+   * renames and reindentations. IntelliJ calls it History for Selection and it
+   * is the fastest way to answer "when did this block become like this".
+   */
+  ipcMain.handle(
+    'git:lineHistory',
+    async (_e, cwd: string, file: string, from: number, to: number, limit = 40) => {
+      const rel = path.relative(cwd, file) || file
+      const res = await gitSafe(cwd, [
+        'log',
+        `--max-count=${limit}`,
+        '--no-color',
+        `--format=${LOG_SEP}%H${LOG_FIELD}%h${LOG_FIELD}%s${LOG_FIELD}%an${LOG_FIELD}%at`,
+        `-L${from},${to}:${rel}`,
+      ])
+      if (!res.ok) return { ok: false, out: res.out, entries: [] }
+      const entries = res.out
+        .split(LOG_SEP)
+        .filter((chunk) => chunk.trim())
+        .map((chunk) => {
+          const newline = chunk.indexOf('\n')
+          const header = newline === -1 ? chunk : chunk.slice(0, newline)
+          const [hash, shortHash, subject, author, date] = header.split(LOG_FIELD)
+          return {
+            hash,
+            shortHash,
+            subject,
+            author,
+            date: Number(date) || 0,
+            diff: newline === -1 ? '' : chunk.slice(newline + 1),
+          }
+        })
+      return { ok: true, out: '', entries }
+    },
+  )
 }

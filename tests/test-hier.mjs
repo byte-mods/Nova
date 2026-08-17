@@ -47,6 +47,21 @@ await manager.openDocument(f,'rust',text)
 // wait until rust-analyzer answers
 for(let i=0;i<45;i++){ const d=await manager.definition(f,'rust',22,13); if((Array.isArray(d)?d:d?[d]:[]).length)break; await new Promise(r=>setTimeout(r,2000)) }
 
+/**
+ * Answering `definition` only means the file parsed. Call hierarchy needs the
+ * crate graph, which lands later — so poll rather than asking once and reading
+ * an empty array as "the feature is broken".
+ */
+async function settle(query, ok, tries = 20) {
+  let last
+  for (let i = 0; i < tries; i++) {
+    last = await query()
+    if (ok(last)) return last
+    await new Promise(r => setTimeout(r, 1500))
+  }
+  return last
+}
+
 // inlay hints over the whole file
 const hints=await manager.inlayHints(f,'rust',{start:{line:0,character:0},end:{line:24,character:0}})
 check('inlay hints returned', Array.isArray(hints)&&hints.length>0, `${Array.isArray(hints)?hints.length:0} hints`)
@@ -57,9 +72,15 @@ const prep=await manager.prepareCallHierarchy(f,'rust',12,3)
 const items=Array.isArray(prep)?prep:prep?[prep]:[]
 check('prepareCallHierarchy returns an item', items.length>0 && items[0].name==='total', JSON.stringify(items[0]??{}).slice(0,140))
 if(items.length){
-  const incoming=await manager.incomingCalls('rust',items[0])
+  const incoming=await settle(
+    () => manager.incomingCalls('rust',items[0]),
+    r => Array.isArray(r) && r.some(c => c.from.name === 'main'),
+  )
   check('incoming calls find main()', Array.isArray(incoming)&&incoming.some(c=>c.from.name==='main'), JSON.stringify(incoming?.map?.(c=>c.from.name)))
-  const outgoing=await manager.outgoingCalls('rust',items[0])
+  const outgoing=await settle(
+    () => manager.outgoingCalls('rust',items[0]),
+    r => Array.isArray(r) && r.some(c => c.to.name === 'area'),
+  )
   check('outgoing calls find area()', Array.isArray(outgoing)&&outgoing.some(c=>c.to.name==='area'), JSON.stringify(outgoing?.map?.(c=>c.to.name)))
 }
 

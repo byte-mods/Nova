@@ -92,6 +92,9 @@ export function registerCodeIntelligence() {
     if (!MONACO_NATIVE.has(language)) registerEditing(language)
     registerRefactoring(language)
     registerIndexCompletion(language)
+    registerCodeVision(language)
+    registerPostfixCompletion(language)
+    registerIndexSignatureHelp(language)
   }
 
   wireDiagnostics()
@@ -366,22 +369,222 @@ function registerIndexCompletion(language: string) {
         endColumn: word.endColumn,
       }
 
+      const { autoImportEdit } = await import('./autoImport')
+      const text = model.getValue()
+
       return {
-        suggestions: symbols.map((symbol, index) => ({
-          label: symbol.name,
-          kind: (COMPLETION_KIND[symbol.kind] ?? 5) as monacoNs.languages.CompletionItemKind,
-          insertText: symbol.name,
+        suggestions: symbols.map((symbol, index) => {
+          // Auto-import: picking an exported symbol from another file also
+          // inserts the import for it, when the language's imports are
+          // path-derivable (TS/JS relative specifiers, Python modules).
+          const importEdit = autoImportEdit(file, text, symbol, useStore.getState().root ?? '')
+          return {
+            label: importEdit ? { label: symbol.name, description: importEdit.description } : symbol.name,
+            kind: (COMPLETION_KIND[symbol.kind] ?? 5) as monacoNs.languages.CompletionItemKind,
+            insertText: symbol.name,
+            range,
+            detail: symbol.container
+              ? `${symbol.kind} in ${symbol.container}`
+              : `${symbol.kind} · ${basename(symbol.file)}`,
+            documentation: {
+              value: ['```' + symbol.language, symbol.signature, '```', '', `_${relative(useStore.getState().root ?? '', symbol.file)}:${symbol.line}_`].join('\n'),
+            },
+            additionalTextEdits: importEdit
+              ? [{ range: importEdit.range, text: importEdit.text }]
+              : undefined,
+            // Sort after anything the editor itself contributes.
+            sortText: `zz${String(index).padStart(3, '0')}`,
+          }
+        }),
+      }
+    },
+  })
+}
+
+/* ---------------- postfix completion ---------------- */
+
+/**
+ * `.if`, `.not`, `.var` and friends: templates that wrap the expression to the
+ * left of the dot. Offered alongside member completion — typing filters, and a
+ * template only wins if picked, so it never gets in the way of real members.
+ */
+function registerPostfixCompletion(language: string) {
+  monaco.languages.registerCompletionItemProvider(language, {
+    triggerCharacters: ['.'],
+    async provideCompletionItems(model, position) {
+      const { postfixTemplatesFor, postfixSiteAt } = await import('./postfix')
+      const templates = postfixTemplatesFor(language)
+      if (templates.length === 0) return { suggestions: [] }
+
+      const line = model.getLineContent(position.lineNumber)
+      const site = postfixSiteAt(line, position.column)
+      if (!site) return { suggestions: [] }
+
+      const indent = /^[ \t]*/.exec(line)?.[0] ?? ''
+      // The edit replaces from the start of the expression through the cursor,
+      // swallowing the dot and whatever template prefix was typed.
+      const range: monacoNs.IRange = {
+        startLineNumber: position.lineNumber,
+        startColumn: site.startColumn,
+        endLineNumber: position.lineNumber,
+        endColumn: position.column,
+      }
+
+      return {
+        suggestions: templates.map((template) => ({
+          label: `.${template.key}`,
+          kind: 27 as monacoNs.languages.CompletionItemKind, // Snippet
+          detail: template.detail,
+          filterText: `${site.expression}.${template.key}`,
+          insertText: template.render(site.expression, indent),
+          insertTextRules: 4, // InsertAsSnippet
           range,
-          detail: symbol.container
-            ? `${symbol.kind} in ${symbol.container}`
-            : `${symbol.kind} · ${basename(symbol.file)}`,
-          documentation: {
-            value: ['```' + symbol.language, symbol.signature, '```', '', `_${relative(useStore.getState().root ?? '', symbol.file)}:${symbol.line}_`].join('\n'),
-          },
-          // Sort after anything the editor itself contributes.
-          sortText: `zz${String(index).padStart(3, '0')}`,
+          sortText: `zzz${template.key}`,
+          documentation: { value: `\`\`\`${language}\n${template.render(site.expression, '').replace(/\$\{\d+:([^}]*)\}/g, '$1').replace(/\$\d+/g, '')}\n\`\`\`` },
         })),
       }
+    },
+  })
+}
+
+/* ---------------- parameter info from the index ---------------- */
+
+/**
+ * Signature help with no language server: the enclosing call's function name
+ * is resolved through the symbol index and its declaration line shown, with
+ * the active argument bolded as far as the raw signature allows.
+ */
+function registerIndexSignatureHelp(language: string) {
+  if (MONACO_NATIVE.has(language)) return
+  monaco.languages.registerSignatureHelpProvider(language, {
+    signatureHelpTriggerCharacters: ['(', ','],
+    async provideSignatureHelp(model, position) {
+      if (await hasServer(language)) return null
+
+      const line = model.getLineContent(position.lineNumber).slice(0, position.column - 1)
+      // Walk back to the innermost unclosed `(` and take the identifier before it.
+      let depth = 0
+      let openAt = -1
+      for (let i = line.length - 1; i >= 0; i--) {
+        const ch = line[i]
+        if (ch === ')') depth++
+        else if (ch === '(') {
+          if (depth === 0) {
+            openAt = i
+            break
+          }
+          depth--
+        }
+      }
+      if (openAt <= 0) return null
+      const name = /([A-Za-z_$][\w$]*)\s*$/.exec(line.slice(0, openAt))?.[1]
+      if (!name) return null
+
+      const symbols = await window.nova.code.definitions(name, pathForUri(model.uri)).catch(() => [])
+      const callable = symbols.filter((s) => s.kind === 'function' || s.kind === 'method')
+      if (callable.length === 0) return null
+
+      const activeParameter = line.slice(openAt + 1).split(',').length - 1
+      const signatures = callable.slice(0, 3).map((symbol) => {
+        const raw = symbol.signature.trim()
+        const params = /\(([^)]*)\)/.exec(raw)?.[1] ?? ''
+        const parameters = params
+          .split(',')
+          .map((part) => part.trim())
+          .filter(Boolean)
+          .map((part) => ({ label: part }))
+        return { label: raw, parameters, documentation: `${basename(symbol.file)}:${symbol.line}` }
+      })
+
+      return {
+        value: {
+          signatures,
+          activeSignature: 0,
+          activeParameter: Math.min(activeParameter, Math.max(0, (signatures[0]?.parameters.length ?? 1) - 1)),
+        },
+        dispose: () => {},
+      }
+    },
+  })
+}
+
+/* ---------------- code vision: inline usage counts ---------------- */
+
+/**
+ * Usage counts cost one index query per symbol, so they are cached per file and
+ * additionally throttled: Monaco re-requests lenses on every keystroke, and
+ * recomputing dozens of find-usages queries while someone types would make the
+ * editor feel like it is thinking about something else.
+ */
+const codeVisionCache = new Map<
+  string,
+  { version: number; computedAt: number; lenses: monacoNs.languages.CodeLens[] }
+>()
+
+const CODE_VISION_THROTTLE_MS = 10_000
+/** Upper bound on symbols per file, so a 500-declaration file stays responsive. */
+const CODE_VISION_LIMIT = 40
+
+const NOVA_SHOW_USAGES = 'nova.codeVision.showUsages'
+monaco.editor.registerCommand(NOVA_SHOW_USAGES, (_accessor, name: string, file: string) => {
+  void useStore.getState().findUsages(name, file)
+})
+
+/**
+ * IntelliJ's code vision, reduced to the part people read: a usage count above
+ * each class and function, clickable to open Find Usages. Counted from the
+ * symbol index, so no language server is involved.
+ */
+function registerCodeVision(language: string) {
+  monaco.languages.registerCodeLensProvider(language, {
+    async provideCodeLenses(model) {
+      if (!useStore.getState().settings.codeVision) return { lenses: [], dispose: () => {} }
+      const file = pathForUri(model.uri)
+      const key = model.uri.toString()
+      const cached = codeVisionCache.get(key)
+      if (
+        cached &&
+        (cached.version === model.getVersionId() ||
+          Date.now() - cached.computedAt < CODE_VISION_THROTTLE_MS)
+      ) {
+        return { lenses: cached.lenses, dispose: () => {} }
+      }
+
+      const symbols = await window.nova.code.documentSymbols(file).catch(() => [])
+      const interesting = symbols
+        .filter((s) => ['class', 'interface', 'struct', 'trait', 'enum', 'function', 'method', 'type'].includes(s.kind))
+        .slice(0, CODE_VISION_LIMIT)
+
+      const lenses: monacoNs.languages.CodeLens[] = []
+      for (const symbol of interesting) {
+        const references = await window.nova.code.references(symbol.name, file).catch(() => [])
+        const usages = references.filter(
+          (r) => r.kind === 'code' || r.kind === 'import',
+        ).length
+        lenses.push({
+          range: {
+            startLineNumber: symbol.line,
+            startColumn: 1,
+            endLineNumber: symbol.line,
+            endColumn: 1,
+          },
+          command: {
+            id: NOVA_SHOW_USAGES,
+            title: `${usages} usage${usages === 1 ? '' : 's'}`,
+            arguments: [symbol.name, file],
+          },
+        })
+      }
+
+      codeVisionCache.set(key, {
+        version: model.getVersionId(),
+        computedAt: Date.now(),
+        lenses,
+      })
+      return { lenses, dispose: () => {} }
+    },
+    resolveCodeLens(_model, lens) {
+      return lens
     },
   })
 }
@@ -406,23 +609,41 @@ function registerRefactoring(language: string) {
         text: hit.word,
       }
     },
+    /**
+     * Rename edits come from the language server when one is running, and from
+     * the symbol index when one is not.
+     *
+     * The index path is the same engine ⇧F6 drives, run with its defaults:
+     * scope narrowed to the declaring file unless the declaration is exported,
+     * and comments left alone. Anything more deliberate than that belongs in
+     * the Rename dialog, which the toast points at.
+     */
     async provideRenameEdits(model, position, newName) {
-      const edit = (await window.nova.lsp
-        .rename(pathForUri(model.uri), language, position.lineNumber - 1, position.column - 1, newName)
+      const file = pathForUri(model.uri)
+      let edit = (await window.nova.lsp
+        .rename(file, language, position.lineNumber - 1, position.column - 1, newName)
         .catch(() => null)) as WorkspaceEdit | null
+      let title = `Rename to “${newName}”`
+      let warnings: string[] = []
 
       if (!edit || (!edit.changes && !edit.documentChanges)) {
-        return {
-          edits: [],
-          rejectReason: (await hasServer(language))
-            ? 'The language server returned no edits.'
-            : 'Rename needs a language server for this language — see Settings › Language servers.',
-        }
+        const { renameSymbol } = await import('./refactor')
+        const { workspace, siteFromEditorModel } = await import('./refactor/bridge')
+        const site = siteFromEditorModel(model, file, position)
+        const result = await renameSymbol(
+          site,
+          { newName, root: useStore.getState().root ?? '' },
+          workspace,
+        )
+        if (!result.ok) return { edits: [], rejectReason: result.reason }
+        edit = result.edit as WorkspaceEdit
+        title = result.title
+        warnings = result.warnings
       }
 
       // Monaco's bulk edit cannot reach files it has no model for, so apply the
       // whole WorkspaceEdit ourselves — after showing what will change.
-      const approved = await requestApproval(`Rename to “${newName}”`, edit)
+      const approved = await requestApproval(title, edit)
       if (!approved) return { edits: [], rejectReason: 'Rename cancelled' }
       const applied = await applyWorkspaceEdit(edit)
       const files = applied.filter((a) => a.edits > 0).length
@@ -433,6 +654,7 @@ function registerRefactoring(language: string) {
           `Renamed to “${newName}” — ${total} edit${total === 1 ? '' : 's'} in ${files} file${files === 1 ? '' : 's'}`,
           'success',
         )
+      for (const warning of warnings) useStore.getState().notify(warning, 'info')
       void useStore.getState().buildIndex()
       return { edits: [] }
     },

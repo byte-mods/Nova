@@ -18,7 +18,11 @@ export interface ExplainPromptOptions {
   depth: ExplainDepth
 }
 
-const MERMAID_RULES = `
+/**
+ * Shared with the project-scale tutorial contract in `tutorial.ts`: both render
+ * through the same Mermaid component, so both live under the same constraints.
+ */
+export const MERMAID_RULES = `
 Rules for every \`\`\`mermaid block — they are rendered live, so a broken one is
 visible to the reader:
 - Use only: flowchart TD/LR, sequenceDiagram, classDiagram, stateDiagram-v2, erDiagram.

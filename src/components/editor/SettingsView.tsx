@@ -1,11 +1,141 @@
-import { Check, RefreshCw } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Check, RefreshCw, RotateCcw } from 'lucide-react'
+import type { AiProvider } from '@shared/types'
 import { useStore } from '@/state/store'
 import { themes } from '@/theme/themes'
+import { inspectionCatalogue } from '@/lib/inspections'
+import { SHORTCUT_ACTIONS, comboFromEvent, describeCombo, effectiveCombo } from '@/lib/keymap'
+
+/** Rebind rows: click the combo, press the new keys. */
+function KeymapEditor() {
+  const settings = useStore((s) => s.settings)
+  const setSettings = useStore((s) => s.setSettings)
+  const [capturing, setCapturing] = useState<string | null>(null)
+
+  const setBinding = (id: string, combo: string | null) => {
+    const next = { ...settings.keymap }
+    if (combo === null) delete next[id]
+    else next[id] = combo
+    setSettings({ keymap: next })
+  }
+
+  return (
+    <div style={{ display: 'grid', gap: 4, maxWidth: 640 }}>
+      {SHORTCUT_ACTIONS.map((action) => {
+        const combo = effectiveCombo(action, settings.keymap)
+        const overridden = settings.keymap[action.id] !== undefined
+        const isCapturing = capturing === action.id
+        return (
+          <div key={action.id} className="row" style={{ gap: 8 }}>
+            <span style={{ fontSize: 12.5, flex: 1 }}>{action.label}</span>
+            <button
+              className={`btn sm ${isCapturing ? 'primary' : ''}`}
+              style={{ minWidth: 110, fontFamily: 'inherit' }}
+              onClick={() => setCapturing(action.id)}
+              onKeyDown={(e) => {
+                if (!isCapturing) return
+                e.preventDefault()
+                e.stopPropagation()
+                if (e.key === 'Escape') {
+                  setCapturing(null)
+                  return
+                }
+                if (e.key === 'Backspace' || e.key === 'Delete') {
+                  setBinding(action.id, '')
+                  setCapturing(null)
+                  return
+                }
+                const combo2 = comboFromEvent(e.nativeEvent)
+                if (combo2) {
+                  setBinding(action.id, combo2)
+                  setCapturing(null)
+                }
+              }}
+              onBlur={() => setCapturing(null)}
+            >
+              {isCapturing ? 'Press keys…' : combo ? describeCombo(combo) : '—'}
+            </button>
+            {overridden && (
+              <button
+                className="icon-btn"
+                style={{ width: 22, height: 22 }}
+                title="Reset to default"
+                onClick={() => setBinding(action.id, null)}
+              >
+                <RotateCcw size={12} />
+              </button>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+/** One severity dropdown per rule; absent from the profile means the default. */
+function InspectionProfileEditor() {
+  const settings = useStore((s) => s.settings)
+  const setSettings = useStore((s) => s.setSettings)
+  const rules = inspectionCatalogue()
+
+  return (
+    <div style={{ display: 'grid', gap: 4 }}>
+      {rules.map((rule) => {
+        const value = settings.inspectionProfile[rule.id] ?? rule.defaultSeverity
+        return (
+          <div key={rule.id} className="row" style={{ gap: 8 }} title={rule.description}>
+            <select
+              className="select"
+              style={{ width: 100 }}
+              value={value}
+              onChange={(e) =>
+                setSettings({
+                  inspectionProfile: {
+                    ...settings.inspectionProfile,
+                    [rule.id]: e.target.value as typeof value,
+                  },
+                })
+              }
+            >
+              <option value="error">error</option>
+              <option value="warning">warning</option>
+              <option value="info">info</option>
+              <option value="off">off</option>
+            </select>
+            <span style={{ fontSize: 12.5 }}>{rule.name}</span>
+            <code className="mono faint" style={{ fontSize: 10.5, marginLeft: 'auto' }}>
+              {rule.id}
+            </code>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
 
 export default function SettingsView() {
   const settings = useStore((s) => s.settings)
   const setSettings = useStore((s) => s.setSettings)
   const providers = useStore((s) => s.providers)
+  const [localModels, setLocalModels] = useState<string[]>([])
+
+  // Refreshed on open rather than cached in the store: models are pulled and
+  // removed outside Nova, so a list from an hour ago is worse than none.
+  useEffect(() => {
+    let cancelled = false
+    window.nova.ai
+      .localModels()
+      .then((models) => {
+        if (!cancelled) setLocalModels(models)
+      })
+      .catch(() => setLocalModels([]))
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const setCodeStyle = (patch: Partial<typeof settings.codeStyle>) =>
+    setSettings({ codeStyle: { ...settings.codeStyle, ...patch } })
 
   return (
     <div className="settings-view">
@@ -97,7 +227,145 @@ export default function SettingsView() {
             value={settings.autoSave}
             onChange={(v) => setSettings({ autoSave: v })}
           />
+          <Toggle
+            label="Breadcrumbs"
+            value={settings.breadcrumbs}
+            onChange={(v) => setSettings({ breadcrumbs: v })}
+          />
+          <Toggle
+            label="Code vision (usage counts)"
+            value={settings.codeVision}
+            onChange={(v) => setSettings({ codeVision: v })}
+          />
         </div>
+      </section>
+
+      <section>
+        <h2>Keymap</h2>
+        <p className="faint" style={{ margin: '0 0 10px', fontSize: 12, lineHeight: 1.6 }}>
+          Application-level shortcuts. Click a binding and press the new combination; Backspace
+          unbinds, Escape cancels. Editor-local bindings (multi-cursor, folding…) follow Monaco’s
+          keymap and are listed in Find Action.
+        </p>
+        <KeymapEditor />
+      </section>
+
+      <section>
+        <h2>Code style</h2>
+        <p className="faint" style={{ margin: '0 0 10px', fontSize: 12, lineHeight: 1.6 }}>
+          The baseline for Reformat Code (⌥⌘L) and Optimize Imports (⌃⌥O). A{' '}
+          <code className="mono">.editorconfig</code> in the project overrides these per file, and a
+          language server’s own formatter takes precedence over the built-in one.
+        </p>
+        <div className="settings-grid">
+          <Field label="Indent size">
+            <input
+              type="number"
+              min={1}
+              max={8}
+              value={settings.codeStyle.indentSize}
+              onChange={(e) => setCodeStyle({ indentSize: Number(e.target.value) })}
+            />
+          </Field>
+          <Field label="Max line length">
+            <input
+              type="number"
+              min={40}
+              max={400}
+              value={settings.codeStyle.maxLineLength}
+              onChange={(e) => setCodeStyle({ maxLineLength: Number(e.target.value) })}
+            />
+          </Field>
+          <Field label="Blank lines to keep">
+            <input
+              type="number"
+              min={0}
+              max={10}
+              value={settings.codeStyle.maxBlankLines}
+              onChange={(e) => setCodeStyle({ maxBlankLines: Number(e.target.value) })}
+            />
+          </Field>
+          <Field label="Line endings">
+            <select
+              className="select"
+              value={settings.codeStyle.endOfLine}
+              onChange={(e) => setCodeStyle({ endOfLine: e.target.value as 'lf' | 'crlf' })}
+            >
+              <option value="lf">LF (Unix)</option>
+              <option value="crlf">CRLF (Windows)</option>
+            </select>
+          </Field>
+          <Field label="Import order">
+            <select
+              className="select"
+              value={settings.codeStyle.importOrder}
+              onChange={(e) => setCodeStyle({ importOrder: e.target.value as 'keep' | 'alphabetical' })}
+            >
+              <option value="alphabetical">Alphabetical</option>
+              <option value="keep">Keep as written</option>
+            </select>
+          </Field>
+        </div>
+        <div className="toggle-row">
+          <Toggle label="Use tabs" value={settings.codeStyle.useTabs} onChange={(v) => setCodeStyle({ useTabs: v })} />
+          <Toggle
+            label="Re-indent by bracket depth"
+            value={settings.codeStyle.reindent}
+            onChange={(v) => setCodeStyle({ reindent: v })}
+          />
+          <Toggle
+            label="Normalize , and ; spacing"
+            value={settings.codeStyle.normalizeSpacing}
+            onChange={(v) => setCodeStyle({ normalizeSpacing: v })}
+          />
+          <Toggle
+            label="Trim trailing whitespace"
+            value={settings.codeStyle.trimTrailingWhitespace}
+            onChange={(v) => setCodeStyle({ trimTrailingWhitespace: v })}
+          />
+          <Toggle
+            label="Final newline"
+            value={settings.codeStyle.insertFinalNewline}
+            onChange={(v) => setCodeStyle({ insertFinalNewline: v })}
+          />
+          <Toggle
+            label="Remove unused imports"
+            value={settings.codeStyle.removeUnusedImports}
+            onChange={(v) => setCodeStyle({ removeUnusedImports: v })}
+          />
+          <Toggle
+            label="Blank line between import groups"
+            value={settings.codeStyle.groupImports}
+            onChange={(v) => setCodeStyle({ groupImports: v })}
+          />
+          <Toggle
+            label="Format on save"
+            value={settings.formatOnSave}
+            onChange={(v) => setSettings({ formatOnSave: v })}
+          />
+          <Toggle
+            label="Optimize imports on save"
+            value={settings.optimizeImportsOnSave}
+            onChange={(v) => setSettings({ optimizeImportsOnSave: v })}
+          />
+        </div>
+      </section>
+
+      <section>
+        <h2>Inspections</h2>
+        <p className="faint" style={{ margin: '0 0 10px', fontSize: 12, lineHeight: 1.6 }}>
+          Applied live in the editor and by the project-wide Inspect Code run. “Off” disables a rule
+          everywhere; a single line can be suppressed with{' '}
+          <code className="mono">// nova-ignore &lt;rule-id&gt;</code>.
+        </p>
+        <div className="toggle-row" style={{ marginBottom: 8 }}>
+          <Toggle
+            label="Enable inspections"
+            value={settings.inspectionsEnabled}
+            onChange={(v) => setSettings({ inspectionsEnabled: v })}
+          />
+        </div>
+        <InspectionProfileEditor />
       </section>
 
       <section>
@@ -107,7 +375,7 @@ export default function SettingsView() {
             <select
               className="select"
               value={settings.aiProvider}
-              onChange={(e) => setSettings({ aiProvider: e.target.value as 'claude' | 'codex' })}
+              onChange={(e) => setSettings({ aiProvider: e.target.value as AiProvider })}
             >
               {providers.map((p) => (
                 <option key={p.id} value={p.id} disabled={!p.available}>
@@ -120,9 +388,27 @@ export default function SettingsView() {
           <Field label="Model override">
             <input
               value={settings.aiModel}
-              placeholder="e.g. opus, sonnet, gpt-5-codex"
+              list="nova-local-models"
+              placeholder={
+                settings.aiProvider === 'opencode'
+                  ? 'e.g. qwen2.5-coder:0.5b — or provider/model'
+                  : 'e.g. opus, sonnet, gpt-5-codex'
+              }
               onChange={(e) => setSettings({ aiModel: e.target.value })}
             />
+            {/* The models Ollama has actually pulled, so the local provider is
+                not a guessing game about spelling and tags. */}
+            <datalist id="nova-local-models">
+              {localModels.map((model) => (
+                <option key={model} value={model} />
+              ))}
+            </datalist>
+            {settings.aiProvider === 'opencode' && localModels.length === 0 && (
+              <small className="faint">
+                No local models found. Pull a small one first, e.g.{' '}
+                <code>ollama pull qwen2.5-coder:0.5b</code>.
+              </small>
+            )}
           </Field>
           <Field label="Permission mode">
             <select

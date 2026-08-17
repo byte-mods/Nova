@@ -46,6 +46,51 @@ export interface GitCommit {
   /** Unix seconds. */
   date: number
   refs: string
+  /** Parent hashes, oldest-first as git reports them. Drives the log graph. */
+  parents: string[]
+}
+
+/** One row of an interactive rebase todo. */
+export interface RebaseStep {
+  hash: string
+  shortHash: string
+  subject: string
+  action: 'pick' | 'reword' | 'squash' | 'fixup' | 'edit' | 'drop'
+  /** Only used by `reword`. */
+  message?: string
+}
+
+/** A shelved change set: a patch on disk plus what it covers. */
+export interface ShelfEntry {
+  id: string
+  name: string
+  /** Unix milliseconds. */
+  createdAt: number
+  files: string[]
+  /** Size of the stored patch, for the list. */
+  size: number
+}
+
+/** IntelliJ-style changelists: named buckets of locally modified files. */
+export interface Changelist {
+  id: string
+  name: string
+  /** Absolute paths. Files not in any list belong to the default one. */
+  files: string[]
+  /** The list new modifications land in. */
+  active: boolean
+}
+
+/** The three sides of a conflicted file, as git records them in the index. */
+export interface MergeStages {
+  /** Common ancestor — empty when the file was added on both sides. */
+  base: string
+  /** HEAD / current branch. */
+  ours: string
+  /** The branch being merged in. */
+  theirs: string
+  /** The working-tree file, conflict markers and all. */
+  merged: string
 }
 
 export interface GitStatus {
@@ -92,7 +137,12 @@ export interface FileChange {
   deletions: number
 }
 
-export type AiProvider = 'claude' | 'codex'
+/**
+ * `opencode` is the local-model route: it speaks to Ollama (and anything else
+ * it has configured) rather than to a hosted API, so a project can be worked on
+ * with no network and no per-token cost.
+ */
+export type AiProvider = 'claude' | 'codex' | 'opencode'
 
 export type AiEvent =
   | { type: 'session'; sessionId: string; runId: string }
@@ -237,9 +287,31 @@ export interface LspDiagnosticsEvent {
 export interface RunConfig {
   id: string
   label: string
+  /** The full command line the terminal executes, before-launch steps included. */
   command: string
   detail: string
   source: 'detected' | 'custom'
+}
+
+/**
+ * One entry of `.nova/run.json` as the GUI editor reads and writes it. The
+ * composed `RunConfig.command` is derived from these parts by the backend.
+ */
+export interface RunConfigEntry {
+  name: string
+  /** The program or script. Empty for a compound configuration. */
+  command?: string
+  /** Appended to the command, shell-quoted as written. */
+  args?: string
+  /** Environment prefix: VAR=value pairs. */
+  env?: Record<string, string>
+  /** Working directory relative to the project root. */
+  cwd?: string
+  /** Commands run (and required to succeed) before the main one. */
+  before?: string[]
+  /** Names of other entries to run in parallel; makes this a compound config. */
+  compound?: string[]
+  detail?: string
 }
 
 /* ---------------- local history ---------------- */
@@ -314,6 +386,36 @@ export interface DebugBreakpointFile {
   items: DebugBreakpoint[]
 }
 
+/**
+ * One break-on-exception category the adapter offers, e.g. debugpy's `raised`
+ * and `uncaught`. The adapter names them; Nova only decides which are on.
+ */
+export interface ExceptionFilter {
+  /** The adapter's own id, sent back in `setExceptionBreakpoints`. */
+  filter: string
+  label: string
+  description: string
+  /** Whether the adapter suggests it be on out of the box. */
+  default: boolean
+  supportsCondition: boolean
+  conditionDescription: string
+  /** Nova's state for it. */
+  enabled: boolean
+  condition: string
+}
+
+/** A field/data watchpoint: break when a variable's value changes. */
+export interface DataBreakpoint {
+  /** The adapter's opaque id from `dataBreakpointInfo`. */
+  dataId: string
+  /** What the user sees — usually the variable name. */
+  label: string
+  accessType: 'read' | 'write' | 'readWrite'
+  condition?: string
+  hitCondition?: string
+  enabled: boolean
+}
+
 export interface DebugState {
   status: 'inactive' | 'starting' | 'running' | 'paused'
   adapterId: string
@@ -324,8 +426,17 @@ export interface DebugState {
   stopReason: string
   error: string
   breakpoints: DebugBreakpointFile[]
+  /** Break-on-throw categories the adapter offers, with Nova's selection. */
+  exceptionFilters: ExceptionFilter[]
+  dataBreakpoints: DataBreakpoint[]
   supportsStepBack: boolean
   supportsRestart: boolean
+  /** `restartFrame` — IntelliJ calls it Drop Frame. */
+  supportsDropFrame: boolean
+  supportsSetVariable: boolean
+  supportsDataBreakpoints: boolean
+  /** True while a Run to Cursor breakpoint is armed. */
+  runningToCursor: boolean
 }
 
 /* ---------------- tests ---------------- */
@@ -376,4 +487,13 @@ export interface UsageQuery {
   name: string
   /** The file the query originated from, used to rank same-file results first. */
   fromFile?: string
+}
+
+/** One structural-search match, as the renderer receives it. */
+export interface StructuralHit {
+  path: string
+  line: number
+  column: number
+  text: string
+  captures: Record<string, string>
 }

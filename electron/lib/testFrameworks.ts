@@ -1,11 +1,27 @@
 import type { TestEvent } from '../../shared/types'
 
 export interface TestScope {
-  kind: 'all' | 'file' | 'name'
+  kind: 'all' | 'file' | 'name' | 'names'
   /** Absolute path, for `file` and `name`. */
   file?: string
   /** Test name, for `name`. */
   name?: string
+  /** Several test names at once — Rerun Failed Tests. */
+  names?: string[]
+}
+
+/**
+ * `names` folded into each runner's own filter syntax.
+ *
+ * Most runners take a regular expression or pattern for their name filter, so
+ * a union of escaped names reruns exactly the given set in one process. The
+ * escaping matters: a test called `parses (1+2)` must not become a group.
+ */
+export function nameUnion(names: string[], style: 'regex-anchored' | 'regex' | 'plain'): string {
+  const escaped = names.map((name) => escapeRe(name))
+  if (style === 'regex-anchored') return `^(${escaped.join('|')})$`
+  if (style === 'regex') return escaped.join('|')
+  return names.join(' ')
 }
 
 export interface FrameworkContext {
@@ -46,6 +62,9 @@ const go: TestFramework = {
   command: (scope, ctx) => {
     if (scope.kind === 'name' && scope.name) {
       return { command: 'go', args: ['test', '-json', '-run', `^${escapeRe(scope.name)}$`, './...'] }
+    }
+    if (scope.kind === 'names' && scope.names?.length) {
+      return { command: 'go', args: ['test', '-json', '-run', nameUnion(scope.names, 'regex-anchored'), './...'] }
     }
     if (scope.kind === 'file' && scope.file) {
       const dir = ctx.relative(scope.file).split('/').slice(0, -1).join('/') || '.'
@@ -92,6 +111,8 @@ const cargo: TestFramework = {
     const args = ['test']
     if (scope.kind === 'name' && scope.name) args.push(scope.name)
     args.push('--', '--nocapture')
+    // libtest filters are substrings, several allowed as separate arguments.
+    if (scope.kind === 'names' && scope.names?.length) args.push('--exact', ...scope.names)
     return { command: 'cargo', args }
   },
   parseLine: (line) => {
@@ -141,6 +162,9 @@ const pytest: TestFramework = {
     if (scope.kind === 'file' && scope.file) args.push(ctx.relative(scope.file))
     else if (scope.kind === 'name' && scope.file && scope.name) {
       args.push(`${ctx.relative(scope.file)}::${scope.name}`)
+    } else if (scope.kind === 'names' && scope.names?.length) {
+      // `-k` takes a boolean expression over name substrings.
+      args.push('-k', scope.names.map((name) => name.replace(/[^\w]/g, ' ').trim()).filter(Boolean).join(' or '))
     }
     return { command: 'pytest', args }
   },
@@ -215,6 +239,8 @@ function jsRunner(id: string, label: string, bin: string): TestFramework {
       }
       if (scope.kind === 'file' && scope.file) args.push(ctx.relative(scope.file))
       if (scope.kind === 'name' && scope.name) args.push('-t', scope.name)
+      // `-t` is a regex in both runners, so a union reruns the whole set.
+      if (scope.kind === 'names' && scope.names?.length) args.push('-t', nameUnion(scope.names, 'regex'))
       return { command: 'npx', args }
     },
     // Both print one JSON document at the end; stream output is human text.
@@ -263,6 +289,9 @@ const rspec: TestFramework = {
     const args: string[] = []
     if (scope.kind === 'file' && scope.file) args.push(ctx.relative(scope.file))
     if (scope.kind === 'name' && scope.name) args.push('-e', scope.name)
+    if (scope.kind === 'names' && scope.names?.length) {
+      for (const name of scope.names) args.push('-e', name)
+    }
     return { command: 'rspec', args }
   },
 }
@@ -275,6 +304,9 @@ const phpunit: TestFramework = {
     const args: string[] = []
     if (scope.kind === 'file' && scope.file) args.push(ctx.relative(scope.file))
     if (scope.kind === 'name' && scope.name) args.push('--filter', scope.name)
+    if (scope.kind === 'names' && scope.names?.length) {
+      args.push('--filter', nameUnion(scope.names, 'regex'))
+    }
     return { command: './vendor/bin/phpunit', args }
   },
 }
@@ -286,6 +318,9 @@ const gradle: TestFramework = {
   command: (scope) => {
     const args = ['test']
     if (scope.kind === 'name' && scope.name) args.push('--tests', scope.name)
+    if (scope.kind === 'names' && scope.names?.length) {
+      for (const name of scope.names) args.push('--tests', name)
+    }
     return { command: './gradlew', args }
   },
   fallback: (scope, ctx) => ({ command: 'gradle', args: gradle.command(scope, ctx).args }),
@@ -298,6 +333,7 @@ const maven: TestFramework = {
   command: (scope) => {
     const args = ['test']
     if (scope.kind === 'name' && scope.name) args.push(`-Dtest=${scope.name}`)
+    if (scope.kind === 'names' && scope.names?.length) args.push(`-Dtest=${scope.names.join('+')}`)
     return { command: 'mvn', args }
   },
 }

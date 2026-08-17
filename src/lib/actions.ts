@@ -13,6 +13,7 @@ import type * as monacoNs from 'monaco-editor'
 import { currentSite, runRefactoring } from '@/lib/refactor/bridge'
 import { REFACTORINGS } from '@/lib/refactor'
 import { newDiagramTab } from '@/components/diagram/diagramFile'
+import { TUTORIAL_CHAPTERS } from '@/lib/tutorial'
 import { themes } from '@/theme/themes'
 import { useStore } from '@/state/store'
 
@@ -91,6 +92,24 @@ export function appActions(): Action[] {
     } },
     { id: 'close-others', label: 'Close Other Tabs', category: 'File', run: () => store.closeOtherTabs(store.activeTabId ?? '') },
     { id: 'new-diagram', label: 'New Architecture Diagram', category: 'File', run: () => newDiagramTab() },
+    { id: 'gen-uml', label: 'Generate UML Class Diagram from Code', category: 'Diagrams', run: async () => {
+      const { generateUmlDiagram } = await import('@/lib/diagramActions')
+      await generateUmlDiagram()
+    } },
+    { id: 'gen-modules', label: 'Generate Module Dependency Diagram', category: 'Diagrams', run: async () => {
+      const { generateModuleDependencyDiagram } = await import('@/lib/diagramActions')
+      await generateModuleDependencyDiagram()
+    } },
+    { id: 'gen-dsm', label: 'Generate Dependency Structure Matrix', category: 'Diagrams', run: async () => {
+      const { generateDependencyMatrix } = await import('@/lib/diagramActions')
+      await generateDependencyMatrix()
+    } },
+    { id: 'scratches', label: 'Scratch Files…', category: 'File', run: () =>
+      store.openTab({ id: 'scratches', kind: 'scratch', title: 'Scratches' }) },
+    { id: 'new-scratch', label: 'New Scratch File (TypeScript)', category: 'File', run: async () => {
+      const { newScratchFile } = await import('@/components/editor/ScratchView')
+      await newScratchFile('ts')
+    } },
 
     { id: 'go-to-file', label: 'Go to File…', category: 'Navigate', hint: '⌘P', run: () => store.setPalette(true, 'file') },
     { id: 'go-to-symbol', label: 'Go to Symbol in Project…', category: 'Navigate', hint: '⇧⌘O', run: () => store.setPalette(true, 'symbol') },
@@ -108,15 +127,44 @@ export function appActions(): Action[] {
     } },
     { id: 'todos', label: 'Show TODOs', category: 'Search', run: () => store.togglePanel('todo') },
 
+    { id: 'inspect-code', label: 'Inspect Code — whole project', category: 'Code', run: () => void store.runInspectCode() },
+
     { id: 'git', label: 'Show Source Control', category: 'Git', hint: '⇧⌘G', run: () => store.setSidebarView('git') },
     { id: 'git-refresh', label: 'Refresh', category: 'Git', run: () => void store.refreshCommits() },
 
+    { id: 'database', label: 'Database Console', category: 'Tools', run: () => {
+      useStore.getState().openTab({ id: 'database', kind: 'database', title: 'Database' })
+    } },
     { id: 'explain', label: 'Explain This File — docs, diagrams and a tutorial', category: 'AI', hint: '⌥⌘E', run: () => {
       const path = store.tabs.find((t) => t.id === store.activeTabId)?.path
       if (path) void store.explainFile(path)
       else store.notify('Open a source file first.', 'error')
     } },
+    { id: 'tutorial', label: 'Explain This Whole Project — libraries, architecture, patterns and flows', category: 'AI', hint: '⇧⌥⌘E', run: () => void store.generateTutorial('book') },
+    ...TUTORIAL_CHAPTERS.filter((chapter) => chapter.id !== 'book').map((chapter) => ({
+      id: `tutorial:${chapter.id}`,
+      label: `Project Tutorial — ${chapter.short}: ${chapter.blurb}`,
+      category: 'AI',
+      run: () => void store.generateTutorial(chapter.id),
+    })),
     { id: 'toggle-ai', label: 'Toggle AI Console', category: 'AI', hint: '⌘I', run: () => store.toggleAi() },
+
+    { id: 'format', label: 'Reformat Code', category: 'Code', hint: '⌥⌘L', run: async () => {
+      const { activeEditor } = await import('@/lib/refactor/bridge')
+      const { formatDocument } = await import('@/lib/format')
+      const editor = activeEditor()
+      const path = store.tabs.find((t) => t.id === store.activeTabId)?.path
+      if (editor && path) await formatDocument(editor, path)
+      else store.notify('Open a file first.', 'error')
+    } },
+    { id: 'optimize-imports', label: 'Optimize Imports', category: 'Code', hint: '⌃⌥O', run: async () => {
+      const { activeEditor } = await import('@/lib/refactor/bridge')
+      const { optimizeImportsIn } = await import('@/lib/format')
+      const editor = activeEditor()
+      const path = store.tabs.find((t) => t.id === store.activeTabId)?.path
+      if (editor && path) await optimizeImportsIn(editor, path)
+      else store.notify('Open a file first.', 'error')
+    } },
 
     { id: 'refactor-this', label: 'Refactor This…', category: 'Refactor', hint: '⌃T', run: () => useStore.setState({ refactorMenuOpen: true }) },
     ...REFACTORINGS.map((descriptor) => ({
@@ -137,7 +185,19 @@ export function appActions(): Action[] {
     { id: 'debug-start', label: 'Start / Continue', category: 'Debug', hint: 'F5', run: () => void store.startDebug() },
     { id: 'debug-stop', label: 'Stop', category: 'Debug', hint: '⇧F5', run: () => void window.nova.debug.stop() },
     { id: 'debug-clear-bp', label: 'Remove All Breakpoints', category: 'Debug', run: () => void window.nova.debug.clearBreakpoints() },
+    { id: 'debug-run-to-cursor', label: 'Run to Cursor', category: 'Debug', hint: '⌥F9', run: () => {
+      const path = store.tabs.find((t) => t.id === store.activeTabId)?.path
+      if (!path || !store.cursor.line) return
+      void window.nova.debug.runToLine(path, store.cursor.line)
+    } },
+    { id: 'debug-drop-frame', label: 'Drop Frame', category: 'Debug', run: async () => {
+      const result = await window.nova.debug.dropFrame()
+      if (!result.ok) store.notify(result.error, 'error')
+    } },
+    { id: 'debug-breakpoints', label: 'Breakpoints — lines, exceptions and watchpoints', category: 'Debug', run: () => store.showPanel('debug') },
     { id: 'tests-run', label: 'Run All Tests', category: 'Run', run: () => void store.runTests({ kind: 'all' }) },
+    { id: 'run-configs', label: 'Edit Run Configurations…', category: 'Run', run: () =>
+      store.openTab({ id: 'runconfigs', kind: 'runconfigs', title: 'Run Configurations' }) },
     { id: 'terminal', label: 'Terminal', category: 'Run', hint: '⌃`', run: () => store.togglePanel('terminal') },
 
     { id: 'browser', label: 'Open Built-in Browser', category: 'View', run: () =>
@@ -149,6 +209,8 @@ export function appActions(): Action[] {
 
     { id: 'settings', label: 'Open Settings', category: 'Preferences', run: () =>
       store.openTab({ id: 'settings', kind: 'settings', title: 'Settings' }) },
+    { id: 'project-structure', label: 'Project Structure — modules, SDKs, frameworks', category: 'Preferences', run: () =>
+      store.openTab({ id: 'projectmodel', kind: 'projectmodel', title: 'Project Structure' }) },
     { id: 'wrap', label: `Turn Word Wrap ${settings.wordWrap ? 'Off' : 'On'}`, category: 'Preferences', run: () => store.setSettings({ wordWrap: !settings.wordWrap }) },
     { id: 'minimap', label: `Turn Minimap ${settings.minimap ? 'Off' : 'On'}`, category: 'Preferences', run: () => store.setSettings({ minimap: !settings.minimap }) },
     { id: 'blame', label: `Turn Blame Gutter ${settings.showBlame ? 'Off' : 'On'}`, category: 'Preferences', run: () => store.setSettings({ showBlame: !settings.showBlame }) },

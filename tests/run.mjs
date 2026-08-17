@@ -23,9 +23,30 @@ const BUNDLES = [
   ['src/lib/applyEdits.ts', 'applyEdits'],
   ['src/lib/refactor/index.ts', 'refactor'],
   ['src/lib/explain.ts', 'explain'],
+  ['src/lib/tutorial.ts', 'tutorial'],
+  ['electron/lib/opencode.ts', 'opencode'],
+  ['src/lib/format/format.ts', 'format'],
+  ['src/lib/format/imports.ts', 'imports'],
+  ['electron/lib/editorConfig.ts', 'editorConfig'],
+  ['electron/lib/runConfigs.ts', 'runConfigs'],
+  ['src/lib/inspections/batch.ts', 'inspections'],
+  ['src/lib/postfix.ts', 'postfix'],
+  ['src/lib/sqlTools.ts', 'sqlTools'],
+  ['src/lib/codeDiagrams.ts', 'codeDiagrams'],
 ]
 
-const OFFLINE = ['test-parse', 'test-edits', 'test-frameworks', 'test-index', 'test-refactor', 'test-explain']
+const OFFLINE = [
+  'test-parse',
+  'test-edits',
+  'test-frameworks',
+  'test-index',
+  'test-refactor',
+  'test-explain',
+  'test-tutorial',
+  'test-opencode',
+  'test-format',
+  'test-tools',
+]
 const TOOLS = ['test-lsp', 'test-hier', 'test-dap-py']
 
 const only = process.argv[2]
@@ -36,7 +57,19 @@ process.stdout.write(`building ${BUNDLES.length} modules → ${BUILD}\n`)
 for (const [src, out] of BUNDLES) {
   await exec(
     'npx',
-    ['esbuild', src, '--bundle', '--format=esm', '--platform=node', `--outfile=${BUILD}/${out}.js`, '--log-level=error'],
+    [
+      'esbuild',
+      src,
+      '--bundle',
+      '--format=esm',
+      '--platform=node',
+      // `electron` resolves to the *binary path*, not the API, outside a running
+      // Electron process — bundling it in crashes on a dynamic require. The stub
+      // supplies the little of `app` the main-process modules actually use.
+      '--alias:electron=./tests/stubs/electron.mjs',
+      `--outfile=${BUILD}/${out}.js`,
+      '--log-level=error',
+    ],
     { cwd: REPO },
   )
 }

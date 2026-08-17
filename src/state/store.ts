@@ -15,12 +15,38 @@ import type {
   ProviderInfo,
   RecentProject,
 } from '@shared/types'
+import type { CoverageReport } from '@shared/coverage'
+import type { ChatSummary, Plan, StoredChat } from '@shared/chat'
+import type {
+  InstalledPlugin,
+  PluginInstallProgress,
+  PluginLogEvent,
+  PluginPermission,
+  PluginRuntimeState,
+} from '@shared/plugin'
 import { applyTheme, defaultThemeId, getTheme } from '@/theme/themes'
 import { basename } from '@/lib/paths'
 import { languageForPath } from '@/lib/language'
 import { lspDidChange, lspDidClose, lspDidOpen, lspDidSave, lspResetDocuments } from '@/lib/lspSync'
 
-export type TabKind = 'file' | 'diff' | 'diagram' | 'browser' | 'settings' | 'commit' | 'history' | 'explain'
+export type TabKind =
+  | 'file'
+  | 'diff'
+  | 'diagram'
+  | 'browser'
+  | 'settings'
+  | 'commit'
+  | 'history'
+  | 'explain'
+  | 'tutorial'
+  | 'http'
+  | 'database'
+  | 'merge'
+  | 'linehistory'
+  | 'scratch'
+  | 'inspect'
+  | 'runconfigs'
+  | 'projectmodel'
 
 export interface DiffPayload {
   before: string
@@ -44,6 +70,8 @@ export interface Tab {
   group?: GroupId
   /** Pinned tabs resist Close Others and sort to the front. */
   pinned?: boolean
+  /** For `linehistory` tabs: the 1-based selection the history was asked for. */
+  lineRange?: { from: number; to: number }
 }
 
 /** A generated walkthrough of one file, streamed in from the AI CLI. */
@@ -60,6 +88,25 @@ export interface ExplainDoc {
   finishedAt?: number
 }
 
+/**
+ * A generated walkthrough of the whole project.
+ *
+ * Kept as a single document rather than a map like `explain`, because there is
+ * only ever one project open: asking for a second chapter replaces the first
+ * rather than accumulating tabs the reader has to manage.
+ */
+export interface TutorialDoc {
+  chapter: import('@/lib/tutorial').TutorialChapterId
+  runId?: string
+  provider: AiProvider
+  content: string
+  thinking: string
+  status: 'running' | 'done' | 'error'
+  error?: string
+  startedAt: number
+  finishedAt?: number
+}
+
 export interface Buffer {
   path: string
   content: string
@@ -68,12 +115,51 @@ export interface Buffer {
   mtimeMs: number
 }
 
-export type SidebarView = 'explorer' | 'search' | 'git' | 'diagrams' | 'themes'
+export type SidebarView =
+  | 'explorer'
+  | 'search'
+  | 'structural'
+  | 'git'
+  | 'diagrams'
+  | 'plugins'
+  | 'themes'
 
-export type PaletteMode = 'command' | 'file' | 'symbol' | 'recent' | 'structure' | 'bookmarks'
+export type PaletteMode =
+  | 'command'
+  | 'file'
+  | 'symbol'
+  | 'recent'
+  | 'structure'
+  | 'bookmarks'
+  | 'everywhere'
+  | 'locations'
+
+/** One caret position the user actually visited, for Recent Locations. */
+export interface RecentLocation {
+  file: string
+  /** 1-based. */
+  line: number
+  column: number
+  /** The source line at the time, so the list reads like code. */
+  preview: string
+  at: number
+}
 
 /** Editor groups. A split adds a second one; there are never more than two. */
 export type GroupId = 'main' | 'right'
+
+/**
+ * A fresh, provider-complete session map.
+ *
+ * A function rather than a shared constant so no caller can mutate the blank
+ * one, and written out per provider rather than built from a list so that
+ * adding a provider is a type error here instead of a silent `undefined`.
+ */
+const noSessions = (): Record<AiProvider, string | undefined> => ({
+  claude: undefined,
+  codex: undefined,
+  opencode: undefined,
+})
 
 export interface Bookmark {
   file: string
@@ -192,6 +278,33 @@ export interface Settings {
   aiPermissionMode: 'default' | 'acceptEdits' | 'plan' | 'bypassPermissions'
   browserHome: string
   iconPack: 'nova' | 'classic' | 'minimal'
+  /** Master switch for the built-in inspections. */
+  inspectionsEnabled: boolean
+  /** Severity overrides by rule id; absent means the rule's own default. */
+  inspectionProfile: Record<string, 'error' | 'warning' | 'info' | 'off'>
+  /** User-defined live templates, merged with the built-ins. */
+  userTemplates: import('@/lib/templates').LiveTemplate[]
+  /**
+   * Code style, applied when formatting and when saving. `.editorconfig` in the
+   * project overrides it per file — see `@/lib/format`.
+   */
+  codeStyle: import('@/lib/format/style').CodeStyle
+  /** Run Optimize Imports as part of format-on-save. */
+  optimizeImportsOnSave: boolean
+  /** The symbol path bar above the editor. */
+  breadcrumbs: boolean
+  /** Inline usage counts above declarations (code vision). */
+  codeVision: boolean
+  /**
+   * User keymap: action id -> combo like `mod+shift+f`. Absent means the
+   * default binding; an empty string unbinds the action.
+   */
+  keymap: Record<string, string>
+  /**
+   * Saved search scopes: named file masks for Find in Project. `!pattern`
+   * entries exclude, e.g. `src/**, !**\/*.test.ts`.
+   */
+  searchScopes: { name: string; mask: string }[]
   sidebarWidth: number
   aiWidth: number
   panelHeight: number
@@ -214,6 +327,31 @@ export const defaultSettings: Settings = {
   aiPermissionMode: 'acceptEdits',
   browserHome: 'http://localhost:3000',
   iconPack: 'nova',
+  inspectionsEnabled: true,
+  inspectionProfile: {},
+  userTemplates: [],
+  codeStyle: {
+    indentSize: 2,
+    useTabs: false,
+    maxLineLength: 100,
+    trimTrailingWhitespace: true,
+    insertFinalNewline: true,
+    maxBlankLines: 2,
+    reindent: false,
+    normalizeSpacing: true,
+    importOrder: 'alphabetical',
+    removeUnusedImports: true,
+    groupImports: true,
+    endOfLine: 'lf',
+  },
+  optimizeImportsOnSave: false,
+  breadcrumbs: true,
+  codeVision: true,
+  keymap: {},
+  searchScopes: [
+    { name: 'Production code', mask: '!**/*.test.*, !**/*.spec.*, !**/test/**, !**/tests/**, !**/__tests__/**' },
+    { name: 'Tests only', mask: '**/*.test.*, **/*.spec.*, **/test/**, **/tests/**, **/__tests__/**' },
+  ],
   sidebarWidth: 260,
   aiWidth: 400,
   panelHeight: 220,
@@ -236,6 +374,8 @@ interface State {
   groupActive: Record<GroupId, string | null>
   /** Most-recently-used file paths, newest first. */
   recentFiles: string[]
+  /** Caret positions visited, newest first — Recent Locations (⇧⌘E). */
+  recentLocations: RecentLocation[]
   bookmarks: Bookmark[]
   /** Caret position in the active editor, 1-based. */
   cursor: { line: number; column: number }
@@ -244,7 +384,34 @@ interface State {
   sidebarVisible: boolean
   aiVisible: boolean
   panelVisible: boolean
-  panelTab: 'terminal' | 'problems' | 'usages' | 'hierarchy' | 'tests' | 'debug' | 'todo'
+  panelTab: 'terminal' | 'problems' | 'usages' | 'hierarchy' | 'tests' | 'debug' | 'todo' | 'coverage' | 'build' | 'profile' | 'infra'
+
+  /** Last loaded coverage report, or null when none has been produced. */
+  coverage: CoverageReport | null
+  coverageLoading: boolean
+  /** Draw uncovered-line markers in the editor gutter. */
+  coverageVisible: boolean
+
+  /** Installed plugins, mirrored from the main process. */
+  plugins: InstalledPlugin[]
+  /** What each running plugin registered at activation. */
+  pluginRuntime: PluginRuntimeState[]
+  /** Host log, newest last. Capped so a chatty plugin cannot grow it forever. */
+  pluginLog: PluginLogEvent[]
+  /** Live progress while a git install runs, or null when idle. */
+  pluginInstall: PluginInstallProgress | null
+  /** HTML each plugin view last rendered, keyed `pluginId:viewId`. */
+  pluginViewHtml: Record<string, string>
+
+  /** Project-wide Inspect Code run, or null before the first one. */
+  inspectRun: {
+    running: boolean
+    scanned: number
+    total: number
+    findings: import('@/lib/inspections/batch').BatchFinding[]
+    startedAt: number
+    finishedAt?: number
+  } | null
 
   indexStatus: IndexStatus | null
   usages: UsageResult | null
@@ -252,6 +419,8 @@ interface State {
   lspServers: LspServerStatus[]
   testFrameworks: TestFrameworkInfo[]
   testRun: TestRunState | null
+  /** Finished runs, newest first, for the Tests panel's history dropdown. */
+  testHistory: TestRunState[]
   debug: DebugUiState
 
   expanded: Record<string, boolean>
@@ -262,12 +431,29 @@ interface State {
   gitBusy: boolean
 
   providers: ProviderInfo[]
+  /** Saved conversations for this project, newest first. */
+  chats: ChatSummary[]
+  /** Which conversation `messages` belongs to. */
+  activeChatId: string | null
+  /** The plan awaiting approval or being executed in the active chat. */
+  plan: Plan | null
   messages: AiMessage[]
   aiRunning: boolean
   aiSessionId: Record<AiProvider, string | undefined>
 
   paletteOpen: boolean
   paletteMode: PaletteMode
+  /**
+   * A file mask handed to the Search pane, and a query handed to the palette,
+   * by whoever opened them — the Explorer's "Find in Folder" and "Find File by
+   * Name".
+   *
+   * State rather than a DOM event because the sender switches to the pane and
+   * seeds it in the same tick: an event would be dispatched before the listener
+   * mounts and silently do nothing. The consumer clears the value once applied.
+   */
+  pendingSearchMask: string | null
+  pendingPaletteQuery: string | null
   editPreview: import('@/lib/editPreview').EditPreview | null
   /** Parameter dialog for the refactoring under way, if any. */
   refactorDialog: import('@/lib/refactor/bridge').RefactorDialogState | null
@@ -275,6 +461,8 @@ interface State {
   refactorMenuOpen: boolean
   /** Generated walkthroughs, keyed by the file they describe. */
   explain: Record<string, ExplainDoc>
+  /** The project-wide tutorial, if one has been generated this session. */
+  tutorial: TutorialDoc | null
   /** Breakpoint properties dialog, opened from the gutter. */
   breakpointDialog: { file: string; line: number } | null
   /**
@@ -307,6 +495,7 @@ interface State {
   toggleBookmark: (file?: string, line?: number) => void
   removeBookmark: (file: string, line: number) => void
   noteRecentFile: (path: string) => void
+  noteLocation: (file: string, line: number, column: number) => void
   updateBuffer: (path: string, content: string) => void
   saveBuffer: (path: string) => Promise<void>
   saveAll: () => Promise<void>
@@ -325,6 +514,8 @@ interface State {
   refreshGit: () => Promise<void>
   refreshCommits: () => Promise<void>
 
+  /** Runs every inspection over the whole project into the Inspect tab. */
+  runInspectCode: () => Promise<void>
   buildIndex: () => Promise<void>
   setIndexStatus: (status: IndexStatus) => void
   setLspServers: (servers: LspServerStatus[]) => void
@@ -351,7 +542,15 @@ interface State {
   refreshWatches: () => Promise<void>
 
   detectTestFrameworks: () => Promise<void>
-  runTests: (scope: { kind: 'all' | 'file' | 'name'; file?: string; name?: string }, frameworkId?: string) => Promise<void>
+  runTests: (
+    scope: { kind: 'all' | 'file' | 'name' | 'names'; file?: string; name?: string; names?: string[] },
+    frameworkId?: string,
+    options?: { coverage?: boolean },
+  ) => Promise<void>
+  /** Reruns only the failures of the current (or given) run. */
+  rerunFailedTests: () => Promise<void>
+  /** Shows a past run from the history without executing anything. */
+  showTestRun: (runId: string) => void
   applyTestEvents: (update: { runId: string; framework: string; command: string; events: TestEvent[]; done?: { exitCode: number | null; durationMs: number } }) => void
   cancelTests: () => Promise<void>
 
@@ -361,12 +560,41 @@ interface State {
   setAiRunning: (running: boolean) => void
   setSession: (provider: AiProvider, id: string) => void
   clearConversation: () => void
+  loadChats: () => Promise<void>
+  newChat: () => Promise<void>
+  switchChat: (id: string) => Promise<void>
+  deleteChat: (id: string) => Promise<void>
+  persistChat: () => Promise<void>
+  setPlan: (plan: Plan | null) => void
 
   setPalette: (open: boolean, mode?: PaletteMode) => void
+  searchInFolder: (dir: string) => void
+  findFileIn: (dir: string) => void
 
   explainFile: (path: string, depth?: import('@/lib/explain').ExplainDepth) => Promise<void>
   stopExplain: (path: string) => Promise<void>
   patchExplain: (runId: string, patch: (doc: ExplainDoc) => ExplainDoc) => void
+
+  generateTutorial: (
+    chapter?: import('@/lib/tutorial').TutorialChapterId,
+    provider?: AiProvider,
+  ) => Promise<void>
+  stopTutorial: () => Promise<void>
+  patchTutorial: (runId: string, patch: (doc: TutorialDoc) => TutorialDoc) => void
+
+  loadCoverage: (file?: string) => Promise<void>
+  toggleCoverageVisible: () => void
+
+  refreshPlugins: () => Promise<void>
+  installPlugin: (url: string, options?: { ref?: string; permissions?: PluginPermission[]; force?: boolean }) => Promise<boolean>
+  updatePluginById: (id: string) => Promise<void>
+  setPluginEnabled: (id: string, enabled: boolean) => Promise<void>
+  uninstallPlugin: (id: string) => Promise<void>
+  grantPluginPermissions: (id: string, permissions: PluginPermission[]) => Promise<void>
+  runPluginCommand: (pluginId: string, commandId: string) => Promise<void>
+  appendPluginLog: (event: PluginLogEvent) => void
+  setPluginInstall: (progress: PluginInstallProgress | null) => void
+  setPluginViewHtml: (pluginId: string, viewId: string, html: string) => void
 
   noteExternalChange: (path: string) => Promise<void>
   resolveExternalChange: (path: string, action: 'reload' | 'keep' | 'compare') => Promise<void>
@@ -391,6 +619,7 @@ export const useStore = create<State>((set, get) => ({
   activeGroup: 'main',
   groupActive: { main: null, right: null },
   recentFiles: [],
+  recentLocations: [],
   bookmarks: [],
   cursor: { line: 0, column: 0 },
 
@@ -407,32 +636,58 @@ export const useStore = create<State>((set, get) => ({
   commits: [],
   gitBusy: false,
 
+  coverage: null,
+  coverageLoading: false,
+  coverageVisible: true,
+
+  plugins: [],
+  pluginRuntime: [],
+  pluginLog: [],
+  pluginInstall: null,
+  pluginViewHtml: {},
+
+  inspectRun: null,
   indexStatus: null,
   usages: null,
   hierarchy: null,
   lspServers: [],
   testFrameworks: [],
   testRun: null,
+  testHistory: [],
   debug: { adapters: [], state: null, output: '', watches: [] },
 
   providers: [],
+  chats: [],
+  activeChatId: null,
+  plan: null,
   messages: [],
   aiRunning: false,
-  aiSessionId: { claude: undefined, codex: undefined },
+  aiSessionId: noSessions(),
 
   paletteOpen: false,
   paletteMode: 'command',
+  pendingSearchMask: null,
+  pendingPaletteQuery: null,
   editPreview: null,
   refactorDialog: null,
   refactorMenuOpen: false,
   explain: {},
+  tutorial: null,
   breakpointDialog: null,
   externalChanges: {},
   toast: null,
 
   async init() {
     const stored = await nova().app.readSettings<Partial<Settings>>()
-    const settings = { ...defaultSettings, ...(stored ?? {}) }
+    const settings: Settings = {
+      ...defaultSettings,
+      ...(stored ?? {}),
+      // Nested objects need merging rather than replacing, or a settings file
+      // written by an older build drops every option added since.
+      codeStyle: { ...defaultSettings.codeStyle, ...(stored?.codeStyle ?? {}) },
+      inspectionProfile: { ...defaultSettings.inspectionProfile, ...(stored?.inspectionProfile ?? {}) },
+      keymap: { ...defaultSettings.keymap, ...(stored?.keymap ?? {}) },
+    }
     applyTheme(getTheme(settings.themeId))
     const recents = await nova().app.recents()
     set({ settings, recents, ready: true })
@@ -459,9 +714,12 @@ export const useStore = create<State>((set, get) => ({
       expanded: { [path]: true },
       commits: [],
       messages: [],
+      chats: [],
+      activeChatId: null,
+      plan: null,
       usages: null,
       indexStatus: null,
-      aiSessionId: { claude: undefined, codex: undefined },
+      aiSessionId: noSessions(),
     })
     lspResetDocuments()
     // Terminals hold a live shell rooted in the old project; retire them so the
@@ -478,6 +736,8 @@ export const useStore = create<State>((set, get) => ({
     void get().refreshCommits()
     void get().buildIndex()
     void get().detectTestFrameworks()
+    // Conversations are per project, so they load with it rather than at boot.
+    void get().loadChats()
   },
 
   async pickProject() {
@@ -654,6 +914,32 @@ export const useStore = create<State>((set, get) => ({
   },
 
   /**
+   * Records a caret position for Recent Locations.
+   *
+   * Adjacent positions in the same file merge into one entry — a location is a
+   * place you worked, not every line the caret passed through on the way.
+   */
+  noteLocation(file, line, column) {
+    if (!line) return
+    const locations = get().recentLocations
+    const head = locations[0]
+    const content = get().buffers[file]?.content ?? ''
+    const preview = content.split('\n')[line - 1]?.trim().slice(0, 140) ?? ''
+    if (head && head.file === file && Math.abs(head.line - line) <= 4) {
+      set({
+        recentLocations: [{ file, line, column, preview, at: Date.now() }, ...locations.slice(1)],
+      })
+      return
+    }
+    set({
+      recentLocations: [
+        { file, line, column, preview, at: Date.now() },
+        ...locations.filter((l) => !(l.file === file && Math.abs(l.line - line) <= 4)),
+      ].slice(0, 80),
+    })
+  },
+
+  /**
    * Toggles a bookmark. With no arguments it uses the caret, which is what the
    * F11 binding does.
    */
@@ -709,14 +995,29 @@ export const useStore = create<State>((set, get) => ({
   async saveBuffer(path) {
     const buffer = get().buffers[path]
     if (!buffer || buffer.content === buffer.savedContent) return
-    await nova().fs.write(path, buffer.content)
+
+    // Code style is applied on the way out, so what lands on disk matches the
+    // project's settings even when the edit came from a paste or an agent.
+    const { formatOnSave, optimizeImportsOnSave } = get().settings
+    let content = buffer.content
+    if (formatOnSave && !buffer.binary) {
+      const { formatFile, optimizeImports, resolveStyle } = await import('@/lib/format')
+      if (optimizeImportsOnSave) {
+        const style = await resolveStyle(path)
+        const result = optimizeImports(content, languageForPath(path), style)
+        if (result.ok && result.changed) content = result.text
+      }
+      content = await formatFile(path, content)
+    }
+
+    await nova().fs.write(path, content)
     set({
       buffers: {
         ...get().buffers,
-        [path]: { ...buffer, savedContent: buffer.content, mtimeMs: Date.now() },
+        [path]: { ...buffer, content, savedContent: content, mtimeMs: Date.now() },
       },
     })
-    lspDidSave(path, buffer.content)
+    lspDidSave(path, content)
     void get().refreshGit()
   },
 
@@ -798,6 +1099,65 @@ export const useStore = create<State>((set, get) => ({
     if (!root) return
     const status = await nova().code.build(root)
     set({ indexStatus: status })
+  },
+
+  /**
+   * Inspect Code: every enabled rule over every text file in the project.
+   *
+   * Runs in the renderer over the indexer's file list — the rules are line
+   * regexes, so even large trees finish in seconds, and doing it here means
+   * unsaved buffer content is inspected rather than the stale disk copy.
+   */
+  async runInspectCode() {
+    const root = get().root
+    if (!root) return
+    if (get().inspectRun?.running) return
+
+    get().openTab({ id: 'inspect', kind: 'inspect', title: 'Inspect Code' })
+
+    const files = await nova().fs.findFiles(root, '', 20_000).catch(() => [] as string[])
+    set({
+      inspectRun: { running: true, scanned: 0, total: files.length, findings: [], startedAt: Date.now() },
+    })
+
+    const { inspectText } = await import('@/lib/inspections/batch')
+    const profile = get().settings.inspectionProfile
+    const findings: import('@/lib/inspections/batch').BatchFinding[] = []
+    let scanned = 0
+
+    for (const file of files) {
+      // A newer run may have replaced this one.
+      const current = get().inspectRun
+      if (!current || !current.running || current.startedAt !== get().inspectRun?.startedAt) break
+      const buffer = get().buffers[file]
+      let text = buffer && !buffer.binary ? buffer.content : null
+      if (text === null) {
+        try {
+          const read = await nova().fs.read(file)
+          text = read.binary ? null : read.content
+        } catch {
+          text = null
+        }
+      }
+      if (text !== null && text.length < 2_000_000) {
+        findings.push(...inspectText(file, text, profile))
+      }
+      scanned++
+      if (scanned % 100 === 0 || scanned === files.length) {
+        set({ inspectRun: { ...get().inspectRun!, scanned, findings: [...findings] } })
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      }
+    }
+
+    set({
+      inspectRun: {
+        ...get().inspectRun!,
+        running: false,
+        scanned,
+        findings,
+        finishedAt: Date.now(),
+      },
+    })
   },
 
   setIndexStatus(status) {
@@ -1061,7 +1421,7 @@ export const useStore = create<State>((set, get) => ({
     set({ testFrameworks: await nova().tests.detect(root) })
   },
 
-  async runTests(scope, frameworkId) {
+  async runTests(scope, frameworkId, options) {
     const root = get().root
     if (!root) return
     const framework = frameworkId ?? get().testFrameworks[0]?.id
@@ -1081,9 +1441,39 @@ export const useStore = create<State>((set, get) => ({
       panelVisible: true,
       panelTab: 'tests',
     })
-    const { runId } = await nova().tests.run(root, framework, scope)
+    const { runId } = await nova().tests.run(root, framework, scope, options)
     const run = get().testRun
     if (run) set({ testRun: { ...run, runId } })
+    if (options?.coverage) {
+      // Once the run lands, pick up whatever report it produced.
+      const poll = setInterval(() => {
+        const state = get().testRun
+        if (state?.runId === runId && !state.running) {
+          clearInterval(poll)
+          void get().loadCoverage()
+        }
+        if (state?.runId !== runId) clearInterval(poll)
+      }, 800)
+    }
+  },
+
+  async rerunFailedTests() {
+    const run = get().testRun ?? get().testHistory[0]
+    if (!run) {
+      get().notify('No test run to take failures from.', 'error')
+      return
+    }
+    const failed = run.cases.filter((c) => c.status === 'fail').map((c) => c.name)
+    if (failed.length === 0) {
+      get().notify('Nothing failed in the last run.', 'success')
+      return
+    }
+    await get().runTests({ kind: 'names', names: failed }, run.framework)
+  },
+
+  showTestRun(runId) {
+    const entry = get().testHistory.find((run) => run.runId === runId)
+    if (entry) set({ testRun: entry })
   },
 
   applyTestEvents(update) {
@@ -1121,18 +1511,24 @@ export const useStore = create<State>((set, get) => ({
     // Cap retained output so a chatty suite cannot grow without bound.
     if (output.length > 400_000) output = output.slice(output.length - 400_000)
 
-    set({
-      testRun: {
-        runId: update.runId,
-        framework: update.framework || previous?.framework || '',
-        command: update.command || previous?.command || '',
-        running: !update.done,
-        cases,
-        output,
-        exitCode: update.done?.exitCode ?? previous?.exitCode,
-        durationMs: update.done?.durationMs ?? previous?.durationMs,
-      },
-    })
+    const next: TestRunState = {
+      runId: update.runId,
+      framework: update.framework || previous?.framework || '',
+      command: update.command || previous?.command || '',
+      running: !update.done,
+      cases,
+      output,
+      exitCode: update.done?.exitCode ?? previous?.exitCode,
+      durationMs: update.done?.durationMs ?? previous?.durationMs,
+    }
+    set({ testRun: next })
+
+    // A finished run joins the history, newest first, capped.
+    if (update.done) {
+      set({
+        testHistory: [next, ...get().testHistory.filter((run) => run.runId !== next.runId)].slice(0, 20),
+      })
+    }
   },
 
   async cancelTests() {
@@ -1162,11 +1558,29 @@ export const useStore = create<State>((set, get) => ({
   },
 
   clearConversation() {
-    set({ messages: [], aiSessionId: { claude: undefined, codex: undefined } })
+    set({ messages: [], aiSessionId: noSessions() })
   },
 
   setPalette(open, mode) {
     set({ paletteOpen: open, paletteMode: mode ?? get().paletteMode })
+  },
+
+  /** Opens the Search pane scoped to one folder, from the Explorer. */
+  searchInFolder(dir) {
+    const root = get().root ?? ''
+    const relativeDir = dir.startsWith(root) ? dir.slice(root.length + 1) : dir
+    set({
+      sidebarVisible: true,
+      sidebarView: 'search',
+      pendingSearchMask: relativeDir ? `${relativeDir}/**` : '',
+    })
+  },
+
+  /** Opens the file finder already narrowed to one folder. */
+  findFileIn(dir) {
+    const root = get().root ?? ''
+    const relativeDir = dir.startsWith(root) ? dir.slice(root.length + 1) : dir
+    set({ paletteOpen: true, paletteMode: 'file', pendingPaletteQuery: relativeDir })
   },
 
   /**
@@ -1263,6 +1677,98 @@ export const useStore = create<State>((set, get) => ({
   },
 
   /**
+   * Starts a read-only agent run that documents the whole project, and opens a
+   * tab that renders the answer as it streams.
+   *
+   * `provider` overrides the configured assistant for this run only, which is
+   * how the button offers "generate with Claude" and "generate with Codex" side
+   * by side: the two write noticeably different documents, and comparing them on
+   * the same codebase is worth more than picking one in Settings for ever.
+   *
+   * Like `explainFile`, the run is isolated from the AI console conversation and
+   * uses plan-mode permissions — a document about the code must never become an
+   * edit to it.
+   */
+  async generateTutorial(chapter = 'book', provider) {
+    const { root, settings, providers } = get()
+    if (!root) {
+      get().notify('Open a project first — the tutorial is written from its source.', 'error')
+      return
+    }
+
+    const chosen = provider ?? settings.aiProvider
+    const info = providers.find((p) => p.id === chosen)
+    if (info && !info.available) {
+      get().notify(`${info.label} is not installed — ${info.hint}`, 'error')
+      return
+    }
+
+    const previous = get().tutorial
+    if (previous?.status === 'running' && previous.runId) {
+      await nova().ai.cancel(previous.runId)
+    }
+
+    const { buildTutorialPrompt } = await import('@/lib/tutorial')
+    const projectName = basename(root)
+
+    get().openTab({
+      id: 'tutorial',
+      kind: 'tutorial',
+      title: `${projectName} — tutorial`,
+      subtitle: `Generated technical walkthrough of ${projectName}`,
+    })
+
+    set({
+      tutorial: {
+        chapter,
+        provider: chosen,
+        content: '',
+        thinking: '',
+        status: 'running',
+        startedAt: Date.now(),
+      },
+    })
+
+    try {
+      const { runId } = await nova().ai.start({
+        provider: chosen,
+        prompt: buildTutorialPrompt({ chapter, projectName }),
+        cwd: root,
+        model: settings.aiModel || undefined,
+        // Read-only: the document must never rewrite its subject.
+        permissionMode: 'plan',
+      })
+      const current = get().tutorial
+      if (current) set({ tutorial: { ...current, runId } })
+      await nova().ai.ack(runId)
+    } catch (error) {
+      const current = get().tutorial
+      if (!current) return
+      set({
+        tutorial: {
+          ...current,
+          status: 'error',
+          error: (error as Error).message,
+          finishedAt: Date.now(),
+        },
+      })
+    }
+  },
+
+  async stopTutorial() {
+    const doc = get().tutorial
+    if (!doc?.runId) return
+    await nova().ai.cancel(doc.runId)
+    set({ tutorial: { ...doc, status: 'done', finishedAt: Date.now() } })
+  },
+
+  patchTutorial(runId, patch) {
+    const doc = get().tutorial
+    if (!doc || doc.runId !== runId) return
+    set({ tutorial: patch(doc) })
+  },
+
+  /**
    * Records that `path` changed underneath a dirty buffer. The buffer is left
    * exactly as the user typed it — this only makes the divergence visible, so a
    * later save is a decision rather than an accident.
@@ -1322,6 +1828,218 @@ export const useStore = create<State>((set, get) => ({
     set({ toast: { text, tone } })
     if (toastTimer) clearTimeout(toastTimer)
     toastTimer = setTimeout(() => set({ toast: null }), 4200)
+  },
+
+  /**
+   * Reads whatever coverage report the project has on disk.
+   *
+   * Located by convention, so running `jest --coverage` in a terminal and then
+   * opening this panel just works — the report does not have to come from a run
+   * Nova itself started.
+   */
+  async loadCoverage(file) {
+    const root = get().root
+    if (!root) return
+    set({ coverageLoading: true })
+    try {
+      const coverage = await nova().coverage.load(root, file)
+      set({ coverage })
+      if (!coverage) get().notify('No coverage report found. Run tests with coverage first.', 'error')
+    } catch (err) {
+      get().notify(err instanceof Error ? err.message : String(err), 'error')
+    } finally {
+      set({ coverageLoading: false })
+    }
+  },
+
+  toggleCoverageVisible() {
+    set({ coverageVisible: !get().coverageVisible })
+  },
+
+  /**
+   * Loads the chat list for the open project and restores the newest one.
+   *
+   * Restoring rather than starting empty is the whole point: closing the app
+   * used to lose the conversation, which made the console feel disposable.
+   */
+  async loadChats() {
+    const root = get().root
+    if (!root) {
+      set({ chats: [], activeChatId: null, messages: [], plan: null })
+      return
+    }
+    const chats = await nova().chats.list(root)
+    set({ chats })
+    if (chats.length) await get().switchChat(chats[0].id)
+    else await get().newChat()
+  },
+
+  async newChat() {
+    const root = get().root
+    if (!root) return
+    // Save whatever is on screen before replacing it.
+    await get().persistChat()
+
+    const id = `chat_${Date.now().toString(36)}`
+    const stored: StoredChat = {
+      id,
+      title: 'New chat',
+      messages: [],
+      sessionIds: {},
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    }
+    const chats = await nova().chats.save(root, stored)
+    set({
+      chats,
+      activeChatId: id,
+      messages: [],
+      plan: null,
+      aiSessionId: noSessions(),
+    })
+  },
+
+  async switchChat(id) {
+    const root = get().root
+    if (!root || id === get().activeChatId) return
+    await get().persistChat()
+
+    const stored = await nova().chats.get(root, id)
+    if (!stored) return
+    set({
+      activeChatId: id,
+      messages: (stored.messages as AiMessage[]) ?? [],
+      plan: stored.plan ?? null,
+      aiSessionId: {
+        ...noSessions(),
+        ...(stored.sessionIds as Partial<Record<AiProvider, string | undefined>>),
+      },
+    })
+  },
+
+  async deleteChat(id) {
+    const root = get().root
+    if (!root) return
+    const chats = await nova().chats.delete(root, id)
+    set({ chats })
+    if (get().activeChatId === id) {
+      if (chats.length) {
+        set({ activeChatId: null })
+        await get().switchChat(chats[0].id)
+      } else {
+        set({ activeChatId: null, messages: [], plan: null })
+        await get().newChat()
+      }
+    }
+  },
+
+  /**
+   * Writes the active chat back to disk.
+   *
+   * The title is derived from the first user message the first time there is
+   * one, so the list is browsable without asking the user to name anything.
+   */
+  async persistChat() {
+    const { root, activeChatId, messages, plan, aiSessionId, chats } = get()
+    if (!root || !activeChatId) return
+
+    const existing = chats.find((c) => c.id === activeChatId)
+    const firstUser = messages.find((m) => m.role === 'user')
+    const derived = firstUser?.parts.find((p) => p.kind === 'text')?.text ?? ''
+    const title =
+      existing && existing.title !== 'New chat'
+        ? existing.title
+        : derived
+          ? derived.replace(/\s+/g, ' ').slice(0, 60)
+          : 'New chat'
+
+    const stored: StoredChat = {
+      id: activeChatId,
+      title,
+      messages,
+      sessionIds: { claude: aiSessionId.claude, codex: aiSessionId.codex },
+      plan: plan ?? undefined,
+      createdAt: existing?.createdAt ?? Date.now(),
+      updatedAt: Date.now(),
+    }
+    set({ chats: await nova().chats.save(root, stored) })
+  },
+
+  setPlan(plan) {
+    set({ plan })
+    void get().persistChat()
+  },
+
+  async refreshPlugins() {
+    const [plugins, pluginRuntime] = await Promise.all([nova().plugins.list(), nova().plugins.runtime()])
+    set({ plugins, pluginRuntime })
+  },
+
+  /**
+   * Installs from a git URL. Returns whether it succeeded so the view can keep
+   * the URL in the field on failure — retyping a long URL after a typo in the
+   * branch name is the kind of small insult that makes a feature feel hostile.
+   */
+  async installPlugin(url, options) {
+    set({ pluginInstall: { url, stage: 'cloning', message: 'Starting…' } })
+    try {
+      const plugin = await nova().plugins.install(url, options)
+      await get().refreshPlugins()
+      get().notify(`Installed ${plugin.manifest.name}`, 'success')
+      return true
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      set({ pluginInstall: { url, stage: 'error', message } })
+      get().notify(message.split('\n')[0], 'error')
+      return false
+    }
+  },
+
+  async updatePluginById(id) {
+    try {
+      const plugin = await nova().plugins.update(id)
+      await get().refreshPlugins()
+      get().notify(`${plugin.manifest.name} is now ${plugin.manifest.version}`, 'success')
+    } catch (err) {
+      get().notify(err instanceof Error ? err.message : String(err), 'error')
+    }
+  },
+
+  async setPluginEnabled(id, enabled) {
+    await nova().plugins.setEnabled(id, enabled)
+    await get().refreshPlugins()
+  },
+
+  async uninstallPlugin(id) {
+    await nova().plugins.uninstall(id)
+    await get().refreshPlugins()
+  },
+
+  async grantPluginPermissions(id, permissions) {
+    await nova().plugins.grant(id, permissions)
+    await get().refreshPlugins()
+  },
+
+  async runPluginCommand(pluginId, commandId) {
+    try {
+      await nova().plugins.invoke(pluginId, commandId)
+    } catch (err) {
+      get().notify(err instanceof Error ? err.message : String(err), 'error')
+    }
+  },
+
+  appendPluginLog(event) {
+    // Keep the tail: a plugin in a logging loop should not grow the heap.
+    const next = [...get().pluginLog, event]
+    set({ pluginLog: next.length > 500 ? next.slice(-500) : next })
+  },
+
+  setPluginInstall(progress) {
+    set({ pluginInstall: progress })
+  },
+
+  setPluginViewHtml(pluginId, viewId, html) {
+    set({ pluginViewHtml: { ...get().pluginViewHtml, [`${pluginId}:${viewId}`]: html } })
   },
 }))
 

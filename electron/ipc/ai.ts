@@ -12,11 +12,18 @@ import type {
   FileChange,
   ProviderInfo,
 } from '../../shared/types'
+import { codexMcpArgs, writeClaudeMcpConfig, type ResolvedMcpServer } from '../lib/pluginMcp'
+import { buildOpencodeArgs, ollamaModels, translateOpencodeEvent } from '../lib/opencode'
 
 const exec = promisify(execFile)
 
 interface Ctx {
   broadcast: (channel: string, payload: unknown) => void
+  /**
+   * Plugin-contributed MCP servers, resolved per run. Optional so the AI
+   * console still works in tests that register it without a plugin host.
+   */
+  mcpServers?: () => Promise<ResolvedMcpServer[]>
 }
 
 /** GUI apps do not inherit a login shell PATH, so rebuild the usual dev locations. */
@@ -72,6 +79,17 @@ interface Run {
   preStatus: Set<string>
   /** Set when the CLI reported 401/403, so the exit can explain itself. */
   authFailed?: boolean
+  /**
+   * Whether any streamed assistant text has been emitted for this run.
+   *
+   * Claude's final `result` event repeats the whole answer in `result`. Emitting
+   * both gives the caller the answer twice — invisible in a chat bubble, but a
+   * streamed document arrives duplicated end to end. So `result` is treated as a
+   * fallback for the runs that produced no streaming text at all.
+   */
+  sawAssistantText?: boolean
+  /** OpenCode repeats its sessionID on every event; report it only once. */
+  reportedSession?: boolean
   /**
    * Events produced before the renderer has associated `runId` with a message.
    * They are held here and flushed on `ai:ack` so nothing is dropped when a
@@ -190,11 +208,18 @@ export function registerAiHandlers(ctx: Ctx) {
   }
 
   ipcMain.handle('ai:providers', async (): Promise<ProviderInfo[]> => {
-    const [claudeBin, codexBin] = await Promise.all([which('claude'), which('codex')])
-    const [claudeVer, codexVer] = await Promise.all([
+    const [claudeBin, codexBin, opencodeBin] = await Promise.all([
+      which('claude'),
+      which('codex'),
+      which('opencode'),
+    ])
+    const [claudeVer, codexVer, opencodeVer] = await Promise.all([
       claudeBin ? version(claudeBin) : Promise.resolve(''),
       codexBin ? version(codexBin) : Promise.resolve(''),
+      opencodeBin ? version(opencodeBin) : Promise.resolve(''),
     ])
+    // Only meaningful for opencode, and only worth reporting when it is present.
+    const ollama = opencodeBin ? await ollamaModels() : []
     return [
       {
         id: 'claude',
@@ -216,8 +241,23 @@ export function registerAiHandlers(ctx: Ctx) {
           ? 'Streaming via `codex exec --json`'
           : 'Install with: npm i -g @openai/codex',
       },
+      {
+        id: 'opencode',
+        label: 'OpenCode (local)',
+        available: Boolean(opencodeBin),
+        binary: opencodeBin,
+        version: opencodeVer,
+        hint: !opencodeBin
+          ? 'Install with: npm i -g opencode-ai — then a local model runs through Ollama'
+          : ollama.length > 0
+            ? `Local models: ${ollama.slice(0, 4).join(', ')}${ollama.length > 4 ? `, +${ollama.length - 4}` : ''}`
+            : 'No Ollama models found — pull one, e.g. `ollama pull qwen2.5-coder:0.5b`',
+      },
     ]
   })
+
+  /** The models Ollama has locally, as `ollama/<name>` for opencode's `-m`. */
+  ipcMain.handle('ai:localModels', () => ollamaModels())
 
   ipcMain.handle('ai:start', async (_e, req: AiStartRequest) => {
     const runId = `run_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
@@ -238,10 +278,15 @@ export function registerAiHandlers(ctx: Ctx) {
       prompt = `${prompt}\n\nRelevant files in this project:\n${list}`
     }
 
+    // Enabled plugins can hand the assistant extra tools. Resolved per run so
+    // that enabling a plugin takes effect on the very next prompt.
+    const mcp = (await ctx.mcpServers?.()) ?? []
     const args =
       req.provider === 'claude'
-        ? buildClaudeArgs(req, prompt)
-        : buildCodexArgs(req, prompt)
+        ? buildClaudeArgs(req, prompt, await writeClaudeMcpConfig(mcp))
+        : req.provider === 'opencode'
+          ? buildOpencodeArgs(req, prompt)
+          : buildCodexArgs(req, prompt, codexMcpArgs(mcp))
 
     // The prompt is passed as an argument, so the child must not wait on stdin —
     // `claude -p` otherwise stalls for seconds looking for piped input.
@@ -303,6 +348,20 @@ export function registerAiHandlers(ctx: Ctx) {
             `${req.provider} could not authenticate. Run \`${req.provider} ${req.provider === 'claude' ? 'auth' : 'login'}\` in a terminal, then try again.`,
         })
       }
+      // OpenCode reports a missing or unreachable model as "Unexpected server
+      // error", which tells the user nothing. The overwhelmingly common cause is
+      // that Ollama has no models pulled, so check and say so.
+      if (req.provider === 'opencode' && code !== 0 && !run.cancelled) {
+        const models = await ollamaModels()
+        emitFor(run, {
+          type: 'error',
+          runId,
+          message:
+            models.length === 0
+              ? 'No local models are available. Start Ollama and pull one — a small one is enough to begin: `ollama pull qwen2.5-coder:0.5b`.'
+              : `OpenCode failed with a local model. Available: ${models.join(', ')}. Check the model name in Settings › AI console.`,
+        })
+      }
       emitFor(run, { type: 'done', runId, ok: code === 0 && !run.cancelled && !run.authFailed })
       runs.delete(runId)
       pending.delete(runId)
@@ -358,7 +417,30 @@ export function registerAiHandlers(ctx: Ctx) {
       return
     }
     if (run.provider === 'claude') await handleClaudeEvent(run, event)
+    else if (run.provider === 'opencode') await handleOpencodeEvent(run, event)
     else await handleCodexEvent(run, event)
+  }
+
+  /**
+   * Applies the translated OpenCode events.
+   *
+   * Note what this deliberately does *not* do: capture a before-image per tool
+   * call, the way the Claude path does. OpenCode emits a tool part only once it
+   * has **completed**, so by the time the edit is visible here the file on disk
+   * already contains the change — snapshotting then would record the *result* as
+   * the "before", and every diff would come out empty.
+   *
+   * Change cards for this provider therefore come from `reconcileGitChanges` at
+   * the end of the run, which reads the pre-run content out of git HEAD. The
+   * consequence is worth stating: in a project that is not a git repository,
+   * an OpenCode run reports its edits in the transcript but produces no
+   * reviewable change cards.
+   */
+  async function handleOpencodeEvent(run: Run, event: Record<string, any>) {
+    const { events, sawText } = translateOpencodeEvent(event, run.id, run.reportedSession ?? false)
+    if (events.some((e) => e.type === 'session')) run.reportedSession = true
+    if (sawText) run.sawAssistantText = true
+    for (const emitted of events) emitFor(run, emitted)
   }
 
   async function handleClaudeEvent(run: Run, event: Record<string, any>) {
@@ -390,6 +472,7 @@ export function registerAiHandlers(ctx: Ctx) {
         if (!Array.isArray(content)) return
         for (const block of content) {
           if (block.type === 'text' && block.text) {
+            run.sawAssistantText = true
             emitFor(run, { type: 'assistant-text', runId: run.id, text: block.text })
           } else if (block.type === 'thinking' && block.thinking) {
             emitFor(run, { type: 'thinking', runId: run.id, text: block.thinking })
@@ -442,7 +525,12 @@ export function registerAiHandlers(ctx: Ctx) {
       case 'result': {
         if (event.subtype !== 'success' && event.result) {
           emitFor(run, { type: 'error', runId: run.id, message: String(event.result) })
-        } else if (typeof event.result === 'string' && event.result.trim()) {
+        } else if (
+          !run.sawAssistantText &&
+          typeof event.result === 'string' &&
+          event.result.trim()
+        ) {
+          // Only when nothing streamed: otherwise this repeats the whole answer.
           emitFor(run, { type: 'assistant-text', runId: run.id, text: event.result })
         }
         emitFor(run, {
@@ -583,7 +671,7 @@ export function registerAiHandlers(ctx: Ctx) {
   }
 }
 
-function buildClaudeArgs(req: AiStartRequest, prompt: string): string[] {
+function buildClaudeArgs(req: AiStartRequest, prompt: string, mcpConfig: string | null): string[] {
   const args = [
     '-p',
     '--output-format',
@@ -594,13 +682,25 @@ function buildClaudeArgs(req: AiStartRequest, prompt: string): string[] {
   ]
   if (req.model) args.push('--model', req.model)
   if (req.resumeSessionId) args.push('--resume', req.resumeSessionId)
-  args.push(prompt)
+  // Merged with, not substituted for, the user's own MCP config.
+  if (mcpConfig) args.push('--mcp-config', mcpConfig)
+  // `--` terminates option parsing, so the prompt is always the positional
+  // argument and never a value.
+  //
+  // Without it a *variadic* option immediately before the prompt eats it:
+  // `--mcp-config <configs...>` takes space-separated paths, so
+  // `--mcp-config cfg.json "You are writing…"` reads the whole prompt as a
+  // second config file and the run dies with `ENAMETOOLONG` before the model
+  // is ever called. It also stops a prompt that happens to begin with `-`
+  // from being read as a flag.
+  args.push('--', prompt)
   return args
 }
 
-function buildCodexArgs(req: AiStartRequest, prompt: string): string[] {
+function buildCodexArgs(req: AiStartRequest, prompt: string, mcpArgs: string[]): string[] {
   const args = ['exec', '--json', '--skip-git-repo-check', '-C', req.cwd]
   if (req.model) args.push('-m', req.model)
+  args.push(...mcpArgs)
 
   // `codex exec` takes a sandbox policy, not a permission mode. `plan` maps to
   // read-only so the model can look but not touch.
@@ -615,6 +715,7 @@ function buildCodexArgs(req: AiStartRequest, prompt: string): string[] {
       args.push('--sandbox', 'workspace-write')
   }
 
-  args.push(prompt)
+  // Same reasoning as the Claude builder: the prompt is data, not an option.
+  args.push('--', prompt)
   return args
 }

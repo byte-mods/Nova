@@ -7,12 +7,14 @@ import {
   Bug,
   ChevronDown,
   ChevronRight,
+  CornerDownRight,
   Eye,
   Pause,
   Play,
   Plus,
   RotateCcw,
   Square,
+  Undo2,
   X,
 } from 'lucide-react'
 import type { DebugScope, DebugVariable } from '@shared/types'
@@ -22,7 +24,7 @@ import { basename, relative } from '@/lib/paths'
 export default function DebugView() {
   const debug = useStore((s) => s.debug)
   const root = useStore((s) => s.root) ?? ''
-  const [tab, setTab] = useState<'variables' | 'output'>('variables')
+  const [tab, setTab] = useState<'variables' | 'breakpoints' | 'output'>('variables')
   const [watchInput, setWatchInput] = useState('')
 
   const state = debug.state
@@ -81,6 +83,27 @@ export default function DebugView() {
             >
               <ArrowUpFromLine size={14} />
             </button>
+            <button
+              className="icon-btn"
+              title="Run to cursor (⌥F9)"
+              disabled={!paused}
+              onClick={() => void runToCursor()}
+            >
+              <CornerDownRight size={14} />
+            </button>
+            {state?.supportsDropFrame && (
+              <button
+                className="icon-btn"
+                title="Drop frame — re-enter the selected frame from the top"
+                disabled={!paused}
+                onClick={async () => {
+                  const result = await window.nova.debug.dropFrame()
+                  if (!result.ok) useStore.getState().notify(result.error, 'error')
+                }}
+              >
+                <Undo2 size={14} />
+              </button>
+            )}
             {state?.supportsRestart && (
               <button
                 className="icon-btn"
@@ -110,6 +133,9 @@ export default function DebugView() {
         <div className="segmented">
           <button className={tab === 'variables' ? 'active' : ''} onClick={() => setTab('variables')}>
             Variables
+          </button>
+          <button className={tab === 'breakpoints' ? 'active' : ''} onClick={() => setTab('breakpoints')}>
+            Breakpoints
           </button>
           <button className={tab === 'output' ? 'active' : ''} onClick={() => setTab('output')}>
             Console
@@ -143,6 +169,8 @@ export default function DebugView() {
         <pre className="test-output mono" style={{ flex: 1, overflow: 'auto' }}>
           {debug.output || 'No debug output yet.'}
         </pre>
+      ) : tab === 'breakpoints' ? (
+        <BreakpointsTab />
       ) : (
         <div className="debug-columns">
           <div className="debug-column">
@@ -237,6 +265,142 @@ export default function DebugView() {
   )
 }
 
+/** Continue, but stop at the caret — IntelliJ's ⌥F9. */
+async function runToCursor() {
+  const store = useStore.getState()
+  const file = store.tabs.find((t) => t.id === store.activeTabId)?.path
+  if (!file || !store.cursor.line) {
+    store.notify('Put the caret on the line you want to run to.', 'error')
+    return
+  }
+  await window.nova.debug.runToLine(file, store.cursor.line)
+}
+
+/**
+ * Line breakpoints, break-on-exception categories and field watchpoints in one
+ * list — the three things that can suspend a program, which IntelliJ also
+ * gathers into a single dialog.
+ */
+function BreakpointsTab() {
+  const state = useStore((s) => s.debug.state)
+  const root = useStore((s) => s.root) ?? ''
+  const filters = state?.exceptionFilters ?? []
+  const watchpoints = state?.dataBreakpoints ?? []
+  const lines = state?.breakpoints ?? []
+
+  return (
+    <div className="debug-columns">
+      <div className="debug-column">
+        <div className="debug-column-title">Line breakpoints</div>
+        <div className="debug-column-body">
+          {lines.length === 0 && (
+            <div className="faint" style={{ padding: 10, fontSize: 11.5 }}>
+              None. Click the gutter to add one; right-click it for conditions and log points.
+            </div>
+          )}
+          {lines.flatMap((entry) =>
+            entry.items.map((item) => (
+              <div key={`${entry.file}:${item.line}`} className="tree-row" style={{ paddingLeft: 10 }}>
+                <input
+                  type="checkbox"
+                  checked={item.enabled}
+                  onChange={(e) =>
+                    void window.nova.debug.updateBreakpoint(entry.file, item.line, {
+                      enabled: e.target.checked,
+                    })
+                  }
+                />
+                <button
+                  className="tree-label mono"
+                  style={{ fontSize: 11.5, textAlign: 'left', flex: 1 }}
+                  onClick={() =>
+                    void useStore.getState().openFile(entry.file, { line: item.line })
+                  }
+                >
+                  {relative(root, entry.file)}:{item.line}
+                  {item.condition ? `  ⟨${item.condition}⟩` : ''}
+                  {item.logMessage ? '  ⟨log⟩' : ''}
+                </button>
+              </div>
+            )),
+          )}
+        </div>
+      </div>
+
+      <div className="debug-column">
+        <div className="debug-column-title">Exception breakpoints</div>
+        <div className="debug-column-body">
+          {filters.length === 0 && (
+            <div className="faint" style={{ padding: 10, fontSize: 11.5 }}>
+              {state?.status === 'inactive'
+                ? 'Start a session — the adapter declares which exception categories it can break on.'
+                : 'This adapter offers no exception categories.'}
+            </div>
+          )}
+          {filters.map((filter) => (
+            <div key={filter.filter} style={{ padding: '4px 10px' }}>
+              <label className="refactor-check" title={filter.description}>
+                <input
+                  type="checkbox"
+                  checked={filter.enabled}
+                  onChange={(e) =>
+                    void window.nova.debug.setExceptionBreakpoint(filter.filter, {
+                      enabled: e.target.checked,
+                    })
+                  }
+                />
+                <span>{filter.label}</span>
+              </label>
+              {filter.enabled && filter.supportsCondition && (
+                <input
+                  defaultValue={filter.condition}
+                  placeholder={filter.conditionDescription || 'condition'}
+                  style={{ width: '100%', height: 22, fontSize: 11.5, marginTop: 3 }}
+                  onBlur={(e) =>
+                    void window.nova.debug.setExceptionBreakpoint(filter.filter, {
+                      condition: e.target.value,
+                    })
+                  }
+                />
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="debug-column">
+        <div className="debug-column-title">Watchpoints (fields)</div>
+        <div className="debug-column-body">
+          {watchpoints.length === 0 && (
+            <div className="faint" style={{ padding: 10, fontSize: 11.5 }}>
+              {state?.supportsDataBreakpoints
+                ? 'Right-click a variable while paused to break when it changes.'
+                : 'This adapter does not support data watchpoints.'}
+            </div>
+          )}
+          {watchpoints.map((watchpoint) => (
+            <div key={watchpoint.dataId} className="tree-row" style={{ paddingLeft: 10 }}>
+              <span className="mono" style={{ fontSize: 11.5, color: 'var(--syn-variable)' }}>
+                {watchpoint.label}
+              </span>
+              <span className="faint" style={{ fontSize: 10.5 }}>
+                on {watchpoint.accessType}
+              </span>
+              <button
+                className="icon-btn"
+                style={{ width: 20, height: 20 }}
+                onClick={() => void window.nova.debug.removeDataBreakpoint(watchpoint.dataId)}
+              >
+                <X size={11} />
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function Scopes({ frameId }: { frameId: number }) {
   const [scopes, setScopes] = useState<DebugScope[]>([])
 
@@ -258,6 +422,7 @@ function Scopes({ frameId }: { frameId: number }) {
           name={scope.name}
           value=""
           reference={scope.variablesReference}
+          container={0}
           depth={0}
           defaultOpen={!scope.expensive}
         />
@@ -266,11 +431,20 @@ function Scopes({ frameId }: { frameId: number }) {
   )
 }
 
+/**
+ * One row in the variables tree.
+ *
+ * Two things happen here beyond display: double-clicking a value edits it
+ * through `setVariable`, and right-clicking offers a watchpoint. Both need the
+ * *container's* reference rather than the variable's own, which is why
+ * `container` is threaded down from the parent.
+ */
 function VariableNode({
   name,
   value,
   type,
   reference,
+  container,
   depth,
   defaultOpen,
 }: {
@@ -278,11 +452,17 @@ function VariableNode({
   value: string
   type?: string
   reference: number
+  /** `variablesReference` of the scope or object this variable lives in. */
+  container: number
   depth: number
   defaultOpen?: boolean
 }) {
   const [open, setOpen] = useState(Boolean(defaultOpen))
   const [children, setChildren] = useState<DebugVariable[] | null>(null)
+  const [editing, setEditing] = useState<string | null>(null)
+  const [shown, setShown] = useState(value)
+
+  useEffect(() => setShown(value), [value])
 
   useEffect(() => {
     if (!open || children || reference === 0) return
@@ -296,6 +476,19 @@ function VariableNode({
   }, [open, reference, children])
 
   const expandable = reference > 0
+  const editable = container > 0
+
+  const commit = async (next: string) => {
+    setEditing(null)
+    if (next === shown) return
+    const result = await window.nova.debug.setVariable(container, name, next)
+    if (result.ok) {
+      setShown(result.value)
+      setChildren(null)
+    } else {
+      useStore.getState().notify(result.error, 'error')
+    }
+  }
 
   return (
     <>
@@ -303,6 +496,13 @@ function VariableNode({
         className="tree-row"
         style={{ paddingLeft: 8 + depth * 12, cursor: expandable ? 'pointer' : 'default' }}
         onClick={() => expandable && setOpen((v) => !v)}
+        onContextMenu={async (e) => {
+          if (!editable) return
+          e.preventDefault()
+          const result = await window.nova.debug.addDataBreakpoint(name, container, 'write')
+          useStore.getState().notify(result.message, result.ok ? 'success' : 'error')
+        }}
+        title={editable ? 'Double-click the value to change it · right-click to watch it' : undefined}
       >
         <span className="tree-twisty">
           {expandable && (open ? <ChevronDown size={12} /> : <ChevronRight size={12} />)}
@@ -310,10 +510,33 @@ function VariableNode({
         <span className="mono" style={{ fontSize: 11.5, color: 'var(--syn-variable)' }}>
           {name}
         </span>
-        {value && (
-          <span className="tree-label mono" style={{ fontSize: 11.5 }}>
-            {value}
-          </span>
+        {editing !== null ? (
+          <input
+            autoFocus
+            className="mono"
+            style={{ flex: 1, height: 20, fontSize: 11.5 }}
+            value={editing}
+            onClick={(e) => e.stopPropagation()}
+            onChange={(e) => setEditing(e.target.value)}
+            onBlur={(e) => void commit(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') void commit((e.target as HTMLInputElement).value)
+              if (e.key === 'Escape') setEditing(null)
+            }}
+          />
+        ) : (
+          shown && (
+            <span
+              className="tree-label mono"
+              style={{ fontSize: 11.5 }}
+              onDoubleClick={(e) => {
+                e.stopPropagation()
+                if (editable) setEditing(shown)
+              }}
+            >
+              {shown}
+            </span>
+          )
         )}
         {type && (
           <span className="faint mono" style={{ fontSize: 10 }}>
@@ -329,6 +552,7 @@ function VariableNode({
             value={child.value}
             type={child.type}
             reference={child.variablesReference}
+            container={reference}
             depth={depth + 1}
           />
         ))}

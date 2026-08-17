@@ -5,8 +5,17 @@ by `tests/verify-ui.mjs`, which drives the running app through **real UI
 interaction** (clicking elements, typing, keyboard shortcuts) and asserts on the
 rendered DOM — not by calling store or IPC methods directly.
 
-**Status: 129/129 checks passing** (`npm run test:ui`, run against the live app).
-Every row below has its own assertion in the suite.
+**Status: 134/134 checks passing** (`npm run test:ui`, run against the live app),
+plus 20/20 in `verify-explorer.mjs` and 22/22 in `verify-tutorial.mjs`.
+
+Three sections need something on the machine before they can prove anything, and
+say so rather than passing vacuously:
+
+| Section | Needs |
+|---|---|
+| 8. Browser pane | any server answering on `:4173` |
+| 10. Debugger | `debugpy` on `PATH` (`pip install debugpy`) |
+| 12, 13 | a language server for the fixture's languages; an authenticated AI CLI |
 
 Run it with the app started as:
 
@@ -18,10 +27,12 @@ NOVA_DEBUG_PORT=9223 npm run dev
 node tests/verify-ui.mjs
 ```
 
+A single section can be run on its own by number, e.g. `node tests/verify-ui.mjs 13`.
+
 ## 1. Shell & layout
 - [x] 1.1 Title bar shows the open project name
 - [x] 1.2 Breadcrumb reflects the active file
-- [x] 1.3 Activity bar switches sidebar views (5 views)
+- [x] 1.3 Activity bar switches every sidebar view
 - [x] 1.4 Sidebar toggles from the title bar
 - [x] 1.5 Bottom panel toggles from the title bar
 - [x] 1.6 AI console toggles from the title bar
@@ -32,9 +43,12 @@ node tests/verify-ui.mjs
 - [x] 2.1 Tree lists project files with per-type icons
 - [x] 2.2 Folder expands and collapses on click
 - [x] 2.3 Single click opens a file in a preview tab
-- [x] 2.4 Context menu offers New File / Folder / Diagram / Rename / History / Copy path / Trash
+- [x] 2.4 Context menu offers New File / Folder / Diagram / search / Rename / History / Copy path / Safe Delete
 - [x] 2.5 New file is created from the header button
 - [x] 2.6 Git status decorations appear on changed files
+- [x] 2.7 ⌘-click multi-selects; ⇧-click extends a range; plain click collapses
+- [x] 2.8 Right-click offers Find in Folder and Find File by Name
+- [x] 2.9 Safe Delete reports dangling references before binning anything
 
 ## 3. Editor
 - [x] 3.1 File opens with syntax highlighting
@@ -53,11 +67,13 @@ node tests/verify-ui.mjs
 - [x] 4.6 Clicking a usage traverses to that file and line
 - [x] 4.7 Usages panel groups by file with counts
 - [x] 4.8 Project-wide search (⇧⌘F) returns hits and opens them
+- [x] 4.9 F12 goes to the declaration in another file
+- [x] 4.10 ⇧F12 peeks references inline
 
 ## 5. Autocomplete
 - [x] 5.1 Suggest popup appears while typing
 - [x] 5.2 Popup contains project symbols (class from another file)
-- [x] 5.3 Suggestion detail shows kind and container
+- [x] 5.3 Suggestion shows its kind icon and where it comes from
 - [x] 5.4 Accepting a suggestion inserts the identifier
 
 ## 6. Diagrams
@@ -125,11 +141,16 @@ node tests/verify-ui.mjs
 - [x] 13.1 Provider dropdown lists Claude and Codex
 - [x] 13.2 Suggestion chips fill the composer
 - [x] 13.3 Sending a prompt streams a reply
-- [x] 13.4 Tool calls render and expand
-- [x] 13.5 File changes appear as change cards with +/− counts
-- [x] 13.6 Review opens the diff in the editor
-- [x] 13.7 Revert restores the file
+- [x] 13.3b An edit request is planned first and writes nothing yet
+- [x] 13.3c Approve executes the plan and the edit lands
+- [x] 13.4 Tool calls render as activity rows and expand
+- [x] 13.5 Each touched file appears as a change line with +/− counts
+- [x] 13.6 Clicking a change line opens the diff in the editor
+- [x] 13.7 Revert in the diff view restores the file
 - [x] 13.8 Permission mode selector changes the CLI flags
+- [x] 13.9 The plan card keeps its full height in the flex transcript
+- [x] 13.10 OpenCode (local) is offered alongside Claude and Codex
+
 
 ## 14. Terminal & run
 - [x] 14.1 Terminal opens on a real pseudo-terminal
@@ -193,3 +214,49 @@ The prompt contract and the preamble cleanup are covered offline by
 - [x] 19.8 Replace in Project previews and rewrites every match
 - [x] 19.9 A disk change under a dirty buffer is surfaced
 - [x] 19.10 Breakpoints carry conditions and log messages
+
+## 20. Project tutorial
+Driven by `node tests/verify-tutorial.mjs`. The prompt contract itself is covered
+offline by `tests/test-tutorial.mjs` (125 checks).
+
+- [x] 20.1 The Tutorial button is in the tab strip
+- [x] 20.2 The Explorer header offers it for a project with nothing open
+- [x] 20.3 The chevron opens the provider and chapter menu
+- [x] 20.4 The menu offers Claude and Codex as a per-run choice
+- [x] 20.5 The menu offers each individual chapter
+- [x] 20.6 Starting a chapter records it and opens a tutorial tab
+- [x] 20.7 The chapter rail marks the requested chapter active
+- [x] 20.8 The waiting state names the project and the chapter
+- [x] 20.9 Streamed Markdown renders in the body
+- [x] 20.10 The contents rail is built from the headings that have arrived
+- [x] 20.11 Clicking a contents entry scrolls the document
+- [x] 20.12 Stop ends the run and restores the idle toolbar
+- [x] 20.13 The button reopens an existing document instead of regenerating
+- [x] 20.14 Save writes the chapter into `docs/` and opens it
+- [x] 20.15 The palette lists the project tutorial and every chapter
+- [x] 20.16 The shortcut is bound and rebindable in Settings › Keymap
+
+## 21. Areas outside the UI suite
+
+These shipped after the suite above was written, and the suite does not drive
+them. Listing them as unchecked boxes would be as misleading as listing them as
+checked ones, so this is what actually covers each — and where a row says
+*manual*, that is a gap someone should close, not a claim.
+
+| Area | Covered by |
+|---|---|
+| Inspections — live pass, Inspect Code, Code Cleanup, profiles, spellchecker | `test-tools.mjs` (batch inspections) offline; the panel itself is manual |
+| Structural search and replace | manual — the matcher has no offline suite |
+| Test coverage panel (lcov, Istanbul, JaCoCo/Cobertura, Go) | manual |
+| Profiler (`--cpu-prof`, `.cpuprofile`) | manual |
+| Build tools (Gradle, Maven, npm/pnpm/yarn, Cargo, Make) | manual |
+| HTTP client (`.http`/`.rest`, envs, send) | manual |
+| Database console (psql/mysql/sqlite3) | `test-tools.mjs` covers the SQL helpers; connections and the grid are manual |
+| Docker · Kubernetes · SSH | manual |
+| Plugins — install, permissions, commands, MCP contribution | manual |
+| Git: shelve, changelists, interactive rebase, merge editor, line history | manual |
+| Debugger: exception breakpoints, watchpoints, drop frame, editable variables, run to cursor | `test-dap-py.mjs` covers the session core; the rest is manual |
+| Macros, keymap rebinding, scratch files, project structure, run-config editor | manual |
+
+Anything marked *manual* has been exercised by hand against the running app, but
+nothing re-checks it on every run — treat it as untested when you change it.

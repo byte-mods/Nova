@@ -1,12 +1,14 @@
-import { Files, GitBranch, Palette, Search, Shapes } from 'lucide-react'
+import { Boxes, Braces, Files, GitBranch, Palette, Search, Shapes } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { useStore, type SidebarView } from '@/state/store'
 
 const ITEMS: { id: SidebarView; label: string; Icon: LucideIcon; hint: string }[] = [
   { id: 'explorer', label: 'Explorer', Icon: Files, hint: '⇧⌘E' },
   { id: 'search', label: 'Search', Icon: Search, hint: '⇧⌘F' },
+  { id: 'structural', label: 'Structural Search', Icon: Braces, hint: '' },
   { id: 'git', label: 'Source Control', Icon: GitBranch, hint: '⇧⌘G' },
   { id: 'diagrams', label: 'Diagrams', Icon: Shapes, hint: '' },
+  { id: 'plugins', label: 'Plugins', Icon: Boxes, hint: '' },
   { id: 'themes', label: 'Themes & Settings', Icon: Palette, hint: '' },
 ]
 

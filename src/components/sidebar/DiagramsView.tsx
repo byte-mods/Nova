@@ -41,6 +41,44 @@ export default function DiagramsView() {
 
       <div style={{ padding: '0 10px 10px' }}>
         <div className="sidebar-title" style={{ margin: '2px 0 6px' }}>
+          Generate from code
+        </div>
+        <div style={{ display: 'grid', gap: 5, marginBottom: 10 }}>
+          <button
+            className="template-card"
+            title="Classes, members and inheritance from the symbol index"
+            onClick={async () => {
+              const { generateUmlDiagram } = await import('@/lib/diagramActions')
+              await generateUmlDiagram()
+            }}
+          >
+            <Shapes size={13} />
+            <span>UML class diagram</span>
+          </button>
+          <button
+            className="template-card"
+            title="Which top-level modules import which, from real import statements"
+            onClick={async () => {
+              const { generateModuleDependencyDiagram } = await import('@/lib/diagramActions')
+              await generateModuleDependencyDiagram()
+            }}
+          >
+            <Shapes size={13} />
+            <span>Module dependency graph</span>
+          </button>
+          <button
+            className="template-card"
+            title="Dependency structure matrix — cycles stand out as ⚠ cells"
+            onClick={async () => {
+              const { generateDependencyMatrix } = await import('@/lib/diagramActions')
+              await generateDependencyMatrix()
+            }}
+          >
+            <Shapes size={13} />
+            <span>Dependency matrix (DSM)</span>
+          </button>
+        </div>
+        <div className="sidebar-title" style={{ margin: '2px 0 6px' }}>
           New from template
         </div>
         <div style={{ display: 'grid', gap: 5 }}>

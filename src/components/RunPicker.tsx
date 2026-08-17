@@ -78,11 +78,9 @@ export default function RunPicker() {
           <div className="context-sep" />
           <button
             className="context-item"
-            onClick={async () => {
-              const file = await window.nova.shell.createRunConfig(root)
+            onClick={() => {
               setOpen(false)
-              await useStore.getState().openFile(file)
-              useStore.getState().bumpTree()
+              useStore.getState().openTab({ id: 'runconfigs', kind: 'runconfigs', title: 'Run Configurations' })
             }}
           >
             <Plus size={11} />

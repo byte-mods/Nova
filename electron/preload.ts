@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type {
   AiStartRequest,
+  Changelist,
   CodeReference,
   CodeSymbol,
   DebugAdapterStatus,
@@ -19,14 +20,46 @@ import type {
   IndexStatus,
   LspDiagnosticsEvent,
   LspServerStatus,
+  MergeStages,
   ProviderInfo,
+  RebaseStep,
   RecentProject,
   RunConfig,
+  RunConfigEntry,
   SearchHit,
+  ShelfEntry,
   TestDeclaration,
   TestFrameworkInfo,
+  StructuralHit,
   TestRunUpdate,
 } from '../shared/types'
+import type {
+  InstalledPlugin,
+  PluginInstallProgress,
+  PluginLogEvent,
+  PluginPermission,
+  PluginRuntimeState,
+} from '../shared/plugin'
+import type { HttpEnvironments, HttpFile, HttpResponse } from '../shared/http'
+import type { CoverageReport } from '../shared/coverage'
+import type { BuildProject, BuildTask, DependencyNode } from '../shared/build'
+import type {
+  DatabaseConnection,
+  DatabaseSchema,
+  DriverStatus,
+  QueryResult,
+} from '../shared/database'
+import type { CpuProfile } from '../shared/profile'
+import type {
+  DockerContainer,
+  DockerImage,
+  KubeContext,
+  KubeResource,
+  SshHost,
+  ToolAvailability,
+} from '../shared/infra'
+import type { ChatSummary, StoredChat } from '../shared/chat'
+
 
 /** Subscribe to a main-process push channel; returns an unsubscribe function. */
 function on<T>(channel: string, cb: (payload: T) => void) {
@@ -40,9 +73,14 @@ function on<T>(channel: string, cb: (payload: T) => void) {
 const api = {
   app: {
     openFolderDialog: (): Promise<string | null> => ipcRenderer.invoke('app:openFolderDialog'),
+    openFileDialog: (options?: {
+      filters?: { name: string; extensions: string[] }[]
+    }): Promise<string | null> => ipcRenderer.invoke('app:openFileDialog', options),
     recents: (): Promise<RecentProject[]> => ipcRenderer.invoke('app:recents'),
     addRecent: (p: string): Promise<RecentProject[]> => ipcRenderer.invoke('app:addRecent', p),
     homeDir: (): Promise<string> => ipcRenderer.invoke('app:homeDir'),
+    projectModel: (root: string): Promise<import('./lib/projectModel').ProjectModel> =>
+      ipcRenderer.invoke('app:projectModel', root),
     readSettings: <T>(): Promise<T | null> => ipcRenderer.invoke('app:readSettings'),
     writeSettings: (data: unknown): Promise<void> => ipcRenderer.invoke('app:writeSettings', data),
     revealInFinder: (p: string): Promise<void> => ipcRenderer.invoke('app:reveal', p),
@@ -70,6 +108,10 @@ const api = {
       ipcRenderer.invoke('history:read', file, id),
     historyClear: (file: string): Promise<void> => ipcRenderer.invoke('history:clear', file),
     onChanged: (cb: (payload: { path: string }) => void) => on('fs:changed', cb),
+  },
+  editorconfig: {
+    resolve: (file: string, root: string): Promise<Record<string, string> | null> =>
+      ipcRenderer.invoke('editorconfig:resolve', file, root),
   },
   git: {
     status: (root: string): Promise<GitStatus> => ipcRenderer.invoke('git:status', root),
@@ -120,9 +162,57 @@ const api = {
       ipcRenderer.invoke('git:push', root, setUpstream),
     raw: (root: string, args: string[]): Promise<{ ok: boolean; out: string }> =>
       ipcRenderer.invoke('git:raw', root, args),
+
+    conflicts: (root: string): Promise<string[]> => ipcRenderer.invoke('git:conflicts', root),
+    mergeStages: (root: string, file: string): Promise<MergeStages> =>
+      ipcRenderer.invoke('git:mergeStages', root, file),
+    resolve: (root: string, file: string, content: string): Promise<{ ok: boolean; out: string }> =>
+      ipcRenderer.invoke('git:resolve', root, file, content),
+
+    shelfList: (root: string): Promise<ShelfEntry[]> => ipcRenderer.invoke('git:shelfList', root),
+    shelve: (
+      root: string,
+      name: string,
+      files: string[],
+      revert: boolean,
+    ): Promise<{ ok: boolean; out: string }> =>
+      ipcRenderer.invoke('git:shelve', root, name, files, revert),
+    unshelve: (root: string, id: string, drop: boolean): Promise<{ ok: boolean; out: string }> =>
+      ipcRenderer.invoke('git:unshelve', root, id, drop),
+    shelfDrop: (root: string, id: string): Promise<{ ok: boolean; out: string }> =>
+      ipcRenderer.invoke('git:shelfDrop', root, id),
+    shelfPatch: (root: string, id: string): Promise<string> =>
+      ipcRenderer.invoke('git:shelfPatch', root, id),
+
+    changelists: (root: string): Promise<Changelist[]> => ipcRenderer.invoke('git:changelists', root),
+    saveChangelists: (root: string, lists: Changelist[]): Promise<void> =>
+      ipcRenderer.invoke('git:saveChangelists', root, lists),
+
+    rebaseTodo: (root: string, onto: string): Promise<RebaseStep[]> =>
+      ipcRenderer.invoke('git:rebaseTodo', root, onto),
+    rebaseRun: (root: string, onto: string, steps: RebaseStep[]): Promise<{ ok: boolean; out: string }> =>
+      ipcRenderer.invoke('git:rebaseRun', root, onto, steps),
+    rebaseAbort: (root: string): Promise<{ ok: boolean; out: string }> =>
+      ipcRenderer.invoke('git:rebaseAbort', root),
+    rebaseContinue: (root: string): Promise<{ ok: boolean; out: string }> =>
+      ipcRenderer.invoke('git:rebaseContinue', root),
+
+    lineHistory: (
+      root: string,
+      file: string,
+      from: number,
+      to: number,
+      limit?: number,
+    ): Promise<{
+      ok: boolean
+      out: string
+      entries: { hash: string; shortHash: string; subject: string; author: string; date: number; diff: string }[]
+    }> => ipcRenderer.invoke('git:lineHistory', root, file, from, to, limit),
   },
   ai: {
     providers: (): Promise<ProviderInfo[]> => ipcRenderer.invoke('ai:providers'),
+    /** Models Ollama has pulled locally, for the OpenCode provider. */
+    localModels: (): Promise<string[]> => ipcRenderer.invoke('ai:localModels'),
     start: (req: AiStartRequest): Promise<{ runId: string }> => ipcRenderer.invoke('ai:start', req),
     ack: (runId: string): Promise<void> => ipcRenderer.invoke('ai:ack', runId),
     cancel: (runId: string): Promise<void> => ipcRenderer.invoke('ai:cancel', runId),
@@ -234,6 +324,28 @@ const api = {
     stepOut: (): Promise<void> => ipcRenderer.invoke('debug:stepOut'),
     pause: (): Promise<void> => ipcRenderer.invoke('debug:pause'),
     stepBack: (): Promise<void> => ipcRenderer.invoke('debug:stepBack'),
+    runToLine: (file: string, line: number): Promise<void> =>
+      ipcRenderer.invoke('debug:runToLine', file, line),
+    dropFrame: (frameId?: number): Promise<{ ok: boolean; error: string }> =>
+      ipcRenderer.invoke('debug:dropFrame', frameId),
+    setExceptionBreakpoint: (
+      filter: string,
+      patch: { enabled?: boolean; condition?: string },
+    ): Promise<void> => ipcRenderer.invoke('debug:setExceptionBreakpoint', filter, patch),
+    addDataBreakpoint: (
+      name: string,
+      variablesReference: number,
+      accessType?: 'read' | 'write' | 'readWrite',
+    ): Promise<{ ok: boolean; message: string }> =>
+      ipcRenderer.invoke('debug:addDataBreakpoint', name, variablesReference, accessType),
+    removeDataBreakpoint: (dataId: string): Promise<void> =>
+      ipcRenderer.invoke('debug:removeDataBreakpoint', dataId),
+    setVariable: (
+      variablesReference: number,
+      name: string,
+      value: string,
+    ): Promise<{ ok: boolean; value: string; error: string }> =>
+      ipcRenderer.invoke('debug:setVariable', variablesReference, name, value),
     scopes: (frameId: number): Promise<DebugScope[]> => ipcRenderer.invoke('debug:scopes', frameId),
     variables: (reference: number): Promise<DebugVariable[]> =>
       ipcRenderer.invoke('debug:variables', reference),
@@ -253,10 +365,134 @@ const api = {
     detect: (root: string): Promise<TestFrameworkInfo[]> => ipcRenderer.invoke('tests:detect', root),
     declarations: (file: string): Promise<TestDeclaration[]> =>
       ipcRenderer.invoke('tests:declarations', file),
-    run: (root: string, frameworkId: string, scope: unknown): Promise<{ runId: string }> =>
-      ipcRenderer.invoke('tests:run', root, frameworkId, scope),
+    run: (
+      root: string,
+      frameworkId: string,
+      scope: unknown,
+      options?: { coverage?: boolean },
+    ): Promise<{ runId: string }> => ipcRenderer.invoke('tests:run', root, frameworkId, scope, options),
     cancel: (): Promise<void> => ipcRenderer.invoke('tests:cancel'),
     onUpdate: (cb: (update: TestRunUpdate) => void) => on('tests:update', cb),
+  },
+  chats: {
+    list: (root: string): Promise<ChatSummary[]> => ipcRenderer.invoke('chats:list', root),
+    get: (root: string, id: string): Promise<StoredChat | null> =>
+      ipcRenderer.invoke('chats:get', root, id),
+    save: (root: string, chat: StoredChat): Promise<ChatSummary[]> =>
+      ipcRenderer.invoke('chats:save', root, chat),
+    delete: (root: string, id: string): Promise<ChatSummary[]> =>
+      ipcRenderer.invoke('chats:delete', root, id),
+  },
+  infra: {
+    available: (): Promise<ToolAvailability> => ipcRenderer.invoke('infra:available'),
+    dockerContainers: (all: boolean): Promise<DockerContainer[]> =>
+      ipcRenderer.invoke('docker:containers', all),
+    dockerImages: (): Promise<DockerImage[]> => ipcRenderer.invoke('docker:images'),
+    dockerAction: (action: string, id: string): Promise<string> =>
+      ipcRenderer.invoke('docker:action', action, id),
+    dockerLogs: (id: string, tail?: number): Promise<string> =>
+      ipcRenderer.invoke('docker:logs', id, tail),
+    kubeContexts: (): Promise<KubeContext[]> => ipcRenderer.invoke('kube:contexts'),
+    kubeUse: (context: string): Promise<string> => ipcRenderer.invoke('kube:use', context),
+    kubeNamespaces: (): Promise<string[]> => ipcRenderer.invoke('kube:namespaces'),
+    kubeResources: (kind: string, namespace: string): Promise<KubeResource[]> =>
+      ipcRenderer.invoke('kube:resources', kind, namespace),
+    kubeLogs: (pod: string, namespace: string, tail?: number): Promise<string> =>
+      ipcRenderer.invoke('kube:logs', pod, namespace, tail),
+    kubeDescribe: (kind: string, name: string, namespace: string): Promise<string> =>
+      ipcRenderer.invoke('kube:describe', kind, name, namespace),
+    sshHosts: (): Promise<SshHost[]> => ipcRenderer.invoke('ssh:hosts'),
+  },
+  profile: {
+    open: (file: string): Promise<CpuProfile> => ipcRenderer.invoke('profile:open', file),
+    run: (root: string, script: string, args?: string[]): Promise<CpuProfile> =>
+      ipcRenderer.invoke('profile:run', root, script, args),
+  },
+  db: {
+    drivers: (): Promise<DriverStatus[]> => ipcRenderer.invoke('db:drivers'),
+    connections: (): Promise<DatabaseConnection[]> => ipcRenderer.invoke('db:connections'),
+    save: (connection: DatabaseConnection, password?: string | null): Promise<DatabaseConnection[]> =>
+      ipcRenderer.invoke('db:save', connection, password),
+    remove: (id: string): Promise<DatabaseConnection[]> => ipcRenderer.invoke('db:remove', id),
+    test: (id: string): Promise<{ ok: boolean; message: string }> => ipcRenderer.invoke('db:test', id),
+    schema: (id: string): Promise<DatabaseSchema> => ipcRenderer.invoke('db:schema', id),
+    query: (id: string, sql: string): Promise<QueryResult> => ipcRenderer.invoke('db:query', id, sql),
+  },
+  structural: {
+    search: (
+      root: string,
+      pattern: string,
+      options?: { include?: string; limit?: number },
+    ): Promise<StructuralHit[]> => ipcRenderer.invoke('structural:search', root, pattern, options),
+    replace: (
+      files: string[],
+      pattern: string,
+      replacement: string,
+    ): Promise<{ path: string; before: string; after: string }[]> =>
+      ipcRenderer.invoke('structural:replace', files, pattern, replacement),
+  },
+  build: {
+    detect: (root: string): Promise<BuildProject[]> => ipcRenderer.invoke('build:detect', root),
+    tasks: (root: string, project: BuildProject): Promise<BuildTask[]> =>
+      ipcRenderer.invoke('build:tasks', root, project),
+    dependencies: (root: string, project: BuildProject): Promise<DependencyNode[]> =>
+      ipcRenderer.invoke('build:dependencies', root, project),
+  },
+  coverage: {
+    load: (root: string, file?: string): Promise<CoverageReport | null> =>
+      ipcRenderer.invoke('coverage:load', root, file),
+    find: (root: string): Promise<string | null> => ipcRenderer.invoke('coverage:find', root),
+    args: (frameworkId: string): Promise<string[] | null> =>
+      ipcRenderer.invoke('coverage:args', frameworkId),
+  },
+  http: {
+    parse: (file: string): Promise<HttpFile> => ipcRenderer.invoke('http:parse', file),
+    environments: (file: string): Promise<HttpEnvironments> =>
+      ipcRenderer.invoke('http:environments', file),
+    send: (file: string, requestId: string, environment: string | null): Promise<HttpResponse> =>
+      ipcRenderer.invoke('http:send', file, requestId, environment),
+  },
+  plugins: {
+    list: (): Promise<InstalledPlugin[]> => ipcRenderer.invoke('plugins:list'),
+    dir: (): Promise<string> => ipcRenderer.invoke('plugins:dir'),
+    install: (
+      url: string,
+      options?: { ref?: string; permissions?: PluginPermission[]; force?: boolean },
+    ): Promise<InstalledPlugin> => ipcRenderer.invoke('plugins:install', url, options),
+    update: (id: string): Promise<InstalledPlugin> => ipcRenderer.invoke('plugins:update', id),
+    setEnabled: (id: string, enabled: boolean): Promise<InstalledPlugin | null> =>
+      ipcRenderer.invoke('plugins:setEnabled', id, enabled),
+    uninstall: (id: string): Promise<void> => ipcRenderer.invoke('plugins:uninstall', id),
+    grant: (id: string, permissions: PluginPermission[]): Promise<InstalledPlugin | null> =>
+      ipcRenderer.invoke('plugins:grant', id, permissions),
+    invoke: (pluginId: string, commandId: string, args?: unknown): Promise<unknown> =>
+      ipcRenderer.invoke('plugins:invoke', pluginId, commandId, args),
+    runtime: (): Promise<PluginRuntimeState[]> => ipcRenderer.invoke('plugins:runtime'),
+    viewHtml: (pluginId: string, viewId: string): Promise<string> =>
+      ipcRenderer.invoke('plugins:viewHtml', pluginId, viewId),
+    commands: (): Promise<{ pluginId: string; commandId: string; title: string; category: string }[]> =>
+      ipcRenderer.invoke('plugins:commands'),
+    mcpServers: (): Promise<
+      { key: string; pluginId: string; pluginName: string; name: string; description: string; command: string; args: string[] }[]
+    > => ipcRenderer.invoke('plugins:mcpServers'),
+    setRoot: (root: string | null): Promise<void> => ipcRenderer.invoke('plugins:setRoot', root),
+
+    onList: (cb: (plugins: InstalledPlugin[]) => void) => on('plugins:list', cb),
+    onLog: (cb: (e: PluginLogEvent) => void) => on('plugins:log', cb),
+    onRuntime: (cb: (states: PluginRuntimeState[]) => void) => on('plugins:runtime', cb),
+    onInstallProgress: (cb: (p: PluginInstallProgress) => void) => on('plugins:install-progress', cb),
+    onViewHtml: (cb: (e: { pluginId: string; viewId: string; html: string }) => void) =>
+      on('plugins:viewHtml', cb),
+    onLoadError: (cb: (e: { pluginId: string; error: string }) => void) => on('plugins:loadError', cb),
+
+    /**
+     * The main process asks the renderer for editor state a plugin requested.
+     * The renderer answers on a plain channel rather than a handler because the
+     * request originates on the main side.
+     */
+    onAsk: (cb: (req: { id: string; question: string; params: unknown }) => void) => on('plugins:ask', cb),
+    answer: (id: string, ok: boolean, value?: unknown, error?: string) =>
+      ipcRenderer.send('plugins:answer', { id, ok, value, error }),
   },
   shell: {
     open: (id: string, cwd: string, cols: number, rows: number): Promise<{ pty: boolean; reason: string }> =>
@@ -275,6 +511,10 @@ const api = {
     runConfigs: (root: string): Promise<RunConfig[]> => ipcRenderer.invoke('shell:runConfigs', root),
     createRunConfig: (root: string): Promise<string> =>
       ipcRenderer.invoke('shell:createRunConfig', root),
+    runConfigEntries: (root: string): Promise<RunConfigEntry[]> =>
+      ipcRenderer.invoke('shell:runConfigEntries', root),
+    saveRunConfigEntries: (root: string, entries: RunConfigEntry[]): Promise<void> =>
+      ipcRenderer.invoke('shell:saveRunConfigEntries', root, entries),
     onData: (cb: (chunk: { id: string; data: string; stream: string }) => void) =>
       on('shell:data', cb),
     onExit: (cb: (payload: { id: string; code: number | null }) => void) => on('shell:exit', cb),

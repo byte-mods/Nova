@@ -9,17 +9,23 @@ import {
   FileCode2,
   Loader2,
   Paperclip,
+  MessagesSquare,
   Plus,
+  Trash2,
   Sparkles,
   Terminal,
   TriangleAlert,
   X,
 } from 'lucide-react'
 import type { AiEvent, AiProvider } from '@shared/types'
-import { useStore, type AiMessage } from '@/state/store'
+import type { Plan } from '@shared/chat'
+import { useStore, type AiMessage, type AiMessagePart } from '@/state/store'
 import { basename, relative } from '@/lib/paths'
 import Markdown from '@/components/editor/Markdown'
-import ChangeCard from './ChangeCard'
+import PlanCard from './PlanCard'
+import { ChangeLine, CommandGroup } from './Activity'
+import { buildContextBlock } from '@/lib/aiContext'
+import { applyProgress, buildExecutePrompt, buildPlanPrompt, needsPlan, parsePlan } from '@/lib/planning'
 
 export default function AiConsole() {
   const width = useStore((s) => s.settings.aiWidth)
@@ -31,35 +37,59 @@ export default function AiConsole() {
   const tabs = useStore((s) => s.tabs)
   const activeTabId = useStore((s) => s.activeTabId)
 
+  const chats = useStore((s) => s.chats)
+  const activeChatId = useStore((s) => s.activeChatId)
+  const plan = useStore((s) => s.plan)
+
   const [input, setInput] = useState('')
   const [attachments, setAttachments] = useState<string[]>([])
   const [runId, setRunId] = useState<string | null>(null)
+  const [planningEnabled, setPlanningEnabled] = useState(true)
+  const [showChats, setShowChats] = useState(false)
+  /**
+   * What the in-flight run is for, so its output can be routed on completion.
+   * Refs, not state: the event subscription is created once and would close
+   * over a stale value.
+   */
+  const modeRef = useRef<'chat' | 'plan' | 'execute'>('chat')
+  const requestRef = useRef('')
   const listRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
 
   const provider = providers.find((p) => p.id === settings.aiProvider)
   const activeFile = tabs.find((t) => t.id === activeTabId)?.path
 
-  useAiEvents()
+  useAiEvents(modeRef, requestRef)
 
   useEffect(() => {
     const el = listRef.current
     if (el) el.scrollTop = el.scrollHeight
   }, [messages])
 
-  const send = async () => {
-    const prompt = input.trim()
-    if (!prompt || running || !root) return
+  /**
+   * Starts a run.
+   *
+   * `mode` decides what happens: a normal turn, a read-only planning turn, or
+   * the execution of an already-approved plan. They share everything except the
+   * prompt and the permission mode, so they share this function.
+   */
+  const startRun = async (
+    prompt: string,
+    mode: 'chat' | 'plan' | 'execute',
+    displayText?: string,
+  ) => {
+    if (!root) return
     const store = useStore.getState()
 
-    store.addMessage({
-      id: `u${Date.now()}`,
-      role: 'user',
-      parts: [{ kind: 'text', text: prompt }],
-      changes: [],
-      createdAt: Date.now(),
-    })
-    setInput('')
+    if (displayText) {
+      store.addMessage({
+        id: `u${Date.now()}`,
+        role: 'user',
+        parts: [{ kind: 'text', text: displayText }],
+        changes: [],
+        createdAt: Date.now(),
+      })
+    }
 
     const assistantId = `a${Date.now()}`
     store.addMessage({
@@ -72,21 +102,53 @@ export default function AiConsole() {
       createdAt: Date.now(),
     })
     store.setAiRunning(true)
+    modeRef.current = mode
+    if (displayText) requestRef.current = displayText
 
     const { runId: id } = await window.nova.ai.start({
       provider: settings.aiProvider,
-      prompt,
+      // The context block orients the agent on what the user is looking at;
+      // it cannot discover that from the filesystem.
+      prompt: buildContextBlock({ includeSelection: mode !== 'execute' }) + prompt,
       cwd: root,
       model: settings.aiModel || undefined,
       resumeSessionId: store.aiSessionId[settings.aiProvider],
       attachments,
-      permissionMode: settings.aiPermissionMode,
+      // A planning turn must not be able to write, whatever the user's usual
+      // permission setting is. That is the guarantee the approval gate rests on.
+      permissionMode: mode === 'plan' ? 'plan' : settings.aiPermissionMode,
     })
     setRunId(id)
     setAttachments([])
     store.patchMessage(assistantId, (m) => ({ ...m, runId: id }))
     // Tell the main process the message can now receive this run's events.
     await window.nova.ai.ack(id)
+  }
+
+  const send = async () => {
+    const prompt = input.trim()
+    if (!prompt || running || !root) return
+    setInput('')
+
+    // A request that will change files gets planned first. A question does not:
+    // forcing a plan on "what does this do" doubles the wait for nothing.
+    if (planningEnabled && needsPlan(prompt)) {
+      await startRun(buildPlanPrompt(prompt), 'plan', prompt)
+      return
+    }
+    await startRun(prompt, 'chat', prompt)
+  }
+
+  const approvePlan = async () => {
+    if (!plan) return
+    const approved: Plan = {
+      ...plan,
+      status: 'executing',
+      approvedAt: Date.now(),
+      steps: plan.steps.map((s) => (s.status === 'skipped' ? s : { ...s, status: 'pending' })),
+    }
+    useStore.getState().setPlan(approved)
+    await startRun(buildExecutePrompt(approved), 'execute')
   }
 
   const stop = () => {
@@ -129,13 +191,52 @@ export default function AiConsole() {
         </select>
 
         <button
+          className={`icon-btn ${showChats ? 'active' : ''}`}
+          title="Previous conversations"
+          onClick={() => setShowChats((v) => !v)}
+        >
+          <MessagesSquare size={15} />
+        </button>
+
+        <button
           className="icon-btn"
-          title="New conversation"
-          onClick={() => useStore.getState().clearConversation()}
+          title="New chat"
+          onClick={() => void useStore.getState().newChat()}
         >
           <Plus size={15} />
         </button>
       </div>
+
+      {showChats && (
+        <div className="chat-list">
+          {!chats.length && (
+            <p className="faint" style={{ padding: 8, fontSize: 11 }}>
+              No saved conversations yet.
+            </p>
+          )}
+          {chats.map((chat) => (
+            <div key={chat.id} className={`chat-item ${chat.id === activeChatId ? 'active' : ''}`}>
+              <button
+                className="chat-open"
+                onClick={() => {
+                  void useStore.getState().switchChat(chat.id)
+                  setShowChats(false)
+                }}
+              >
+                <span className="chat-title">{chat.title}</span>
+                <span className="faint chat-meta">{chat.messageCount} msg</span>
+              </button>
+              <button
+                className="icon-btn"
+                title="Delete this conversation"
+                onClick={() => void useStore.getState().deleteChat(chat.id)}
+              >
+                <Trash2 size={11} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
 
       {provider && !provider.available && (
         <div className="ai-warning">
@@ -173,6 +274,25 @@ export default function AiConsole() {
         {messages.map((message) => (
           <MessageView key={message.id} message={message} />
         ))}
+
+        {plan && plan.status !== 'rejected' && (
+          <PlanCard
+            plan={plan}
+            running={running}
+            onApprove={() => void approvePlan()}
+            onReject={() => useStore.getState().setPlan(null)}
+            onToggleStep={(id) =>
+              useStore.getState().setPlan({
+                ...plan,
+                steps: plan.steps.map((step) =>
+                  step.id === id
+                    ? { ...step, status: step.status === 'skipped' ? 'pending' : 'skipped' }
+                    : step,
+                ),
+              })
+            }
+          />
+        )}
       </div>
 
       <div className="ai-composer">
@@ -240,6 +360,18 @@ export default function AiConsole() {
             <option value="bypassPermissions">Full access</option>
           </select>
 
+          <label
+            className={`ai-plan-toggle ${planningEnabled ? 'on' : ''}`}
+            title="Produce a plan for approval before changing any files"
+          >
+            <input
+              type="checkbox"
+              checked={planningEnabled}
+              onChange={(e) => setPlanningEnabled(e.target.checked)}
+            />
+            Plan first
+          </label>
+
           <span style={{ flex: 1 }} />
 
           {running ? (
@@ -287,51 +419,62 @@ function MessageView({ message }: { message: AiMessage }) {
         )}
       </div>
 
-      {message.parts.map((part, i) => {
-        if (part.kind === 'text') {
+      {groupParts(message.parts).map((group, i) => {
+        if (group.kind === 'text') {
           return (
             <div className="ai-text" key={i}>
-              <Markdown content={part.text} />
+              <Markdown content={group.parts.map((p) => p.text).join('')} />
             </div>
           )
         }
-        if (part.kind === 'thinking') return <Collapsible key={i} icon={Brain} title="Thinking" body={part.text} />
-        if (part.kind === 'tool')
+        if (group.kind === 'thinking') {
           return (
-            <ToolCall
+            <Collapsible
               key={i}
-              name={part.toolName ?? 'tool'}
-              input={part.toolInput}
-              result={part.toolResult}
-              ok={part.toolOk}
+              icon={Brain}
+              title="Thinking"
+              body={group.parts.map((p) => p.text).join('\n')}
             />
           )
-        if (part.kind === 'error')
+        }
+        if (group.kind === 'tool') return <CommandGroup key={i} parts={group.parts} />
+        if (group.kind === 'error') {
           return (
             <div className="ai-error" key={i}>
               <TriangleAlert size={13} />
-              <span>{part.text}</span>
+              <span>{group.parts.map((p) => p.text).join('\n')}</span>
             </div>
           )
+        }
         return (
-          <Collapsible key={i} icon={Terminal} title="CLI output" body={part.text} muted />
+          <Collapsible
+            key={i}
+            icon={Terminal}
+            title="CLI output"
+            body={group.parts.map((p) => p.text).join('\n')}
+            muted
+          />
         )
       })}
 
       {message.changes.length > 0 && (
         <div className="ai-changes">
-          <div className="ai-changes-head">
-            <b>{message.changes.length} file{message.changes.length === 1 ? '' : 's'} changed</b>
+          {/*
+            One line per file with its own +/- counts. The full diff cards are
+            behind "Review all" — when six files change, six expanded cards is a
+            wall, and the counts are what tells you which one to open.
+          */}
+          {message.changes.map((change) => (
+            <ChangeLine key={change.path} change={change} root={root} />
+          ))}
+          {message.changes.length > 1 && (
             <button
-              className="btn ghost sm"
+              className="ai-review-all"
               onClick={() => message.changes.forEach((c) => openChangeDiff(c, root))}
             >
-              Review all
+              Review all {message.changes.length} files
             </button>
-          </div>
-          {message.changes.map((change) => (
-            <ChangeCard key={change.path} change={change} root={root} />
-          ))}
+          )}
         </div>
       )}
     </div>
@@ -428,7 +571,10 @@ function summariseToolInput(name: string, input: unknown): string {
 }
 
 /** Bridges main-process AI stream events into the message list. */
-function useAiEvents() {
+function useAiEvents(
+  modeRef: { current: 'chat' | 'plan' | 'execute' },
+  requestRef: { current: string },
+) {
   useEffect(() => {
     const unsubscribe = window.nova.ai.onEvent((raw) => {
       const event = raw as AiEvent
@@ -446,6 +592,12 @@ function useAiEvents() {
           return
         case 'assistant-text':
           if (id) store.patchMessage(id, (m) => appendText(m, 'text', event.text))
+          // While executing, the agent's own `STEP n DONE` markers drive the
+          // checklist, so the card updates as work lands rather than at the end.
+          if (modeRef.current === 'execute' && store.plan) {
+            const advanced = applyProgress(store.plan, event.text)
+            if (advanced !== store.plan) store.setPlan(advanced)
+          }
           return
         case 'thinking':
           if (id) store.patchMessage(id, (m) => appendText(m, 'thinking', event.text))
@@ -490,7 +642,7 @@ function useAiEvents() {
           void store.refreshGit()
           store.bumpTree()
           return
-        case 'done':
+        case 'done': {
           if (id)
             store.patchMessage(id, (m) => ({
               ...m,
@@ -499,11 +651,56 @@ function useAiEvents() {
             }))
           store.setAiRunning(false)
           void store.refreshGit()
+
+          const finished = useStore.getState().messages.find((m) => m.id === id)
+          const text = finished?.parts.filter((p) => p.kind === 'text').map((p) => p.text).join('\n') ?? ''
+
+          if (modeRef.current === 'plan') {
+            // A plan that cannot be parsed is not turned into an approval gate:
+            // showing an empty checklist would be worse than showing the prose
+            // the agent actually wrote, which is already in the transcript.
+            const parsed = parsePlan(text, requestRef.current)
+            if (parsed) store.setPlan(parsed)
+          } else if (modeRef.current === 'execute' && store.plan) {
+            const advanced = applyProgress(store.plan, text)
+            const settled = {
+              ...advanced,
+              steps: advanced.steps.map((step) =>
+                step.status === 'running' ? { ...step, status: 'done' as const } : step,
+              ),
+            }
+            store.setPlan({
+              ...settled,
+              status: settled.steps.every((x) => x.status !== 'pending') ? 'complete' : settled.status,
+            })
+          }
+
+          modeRef.current = 'chat'
+          // The conversation is only worth saving once a turn has completed.
+          void store.persistChat()
           return
+        }
       }
     })
     return unsubscribe
   }, [])
+}
+
+/**
+ * Collapses consecutive parts of the same kind into one group.
+ *
+ * Streaming produces many small parts; rendering each separately gives a
+ * stuttering wall of one-line blocks. Grouping by adjacency keeps the order the
+ * agent actually worked in while making the feed readable.
+ */
+function groupParts(parts: AiMessagePart[]): { kind: AiMessagePart['kind']; parts: AiMessagePart[] }[] {
+  const groups: { kind: AiMessagePart['kind']; parts: AiMessagePart[] }[] = []
+  for (const part of parts) {
+    const last = groups[groups.length - 1]
+    if (last && last.kind === part.kind) last.parts.push(part)
+    else groups.push({ kind: part.kind, parts: [part] })
+  }
+  return groups
 }
 
 function appendText(message: AiMessage, kind: 'text' | 'thinking' | 'log', text: string): AiMessage {
