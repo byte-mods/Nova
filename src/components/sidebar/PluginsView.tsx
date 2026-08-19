@@ -192,6 +192,7 @@ function PluginCard({ plugin }: { plugin: InstalledPlugin }) {
                 {ungranted.join(', ')} but has not been given it.
                 <button
                   className="link-btn"
+                  title={`Give this plugin ${ungranted.join(', ')}`}
                   onClick={() => void useStore.getState().grantPluginPermissions(manifest.id, ungranted)}
                 >
                   Grant now

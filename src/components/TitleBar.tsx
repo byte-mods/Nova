@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import {
   ChevronRight,
   FolderOpen,
@@ -7,12 +8,14 @@ import {
   PanelBottom,
   Save,
   Shapes,
+  Share2,
   Terminal,
 } from 'lucide-react'
 import { useStore } from '@/state/store'
 import { basename, relative } from '@/lib/paths'
 import { newDiagramTab } from '@/components/diagram/diagramFile'
 import RunPicker from '@/components/RunPicker'
+import ShareDialog from '@/components/ShareDialog'
 
 export default function TitleBar() {
   const root = useStore((s) => s.root)
@@ -28,7 +31,18 @@ export default function TitleBar() {
   const dirtyCount = Object.values(buffers).filter((b) => b.content !== b.savedContent).length
   const crumbs = tab?.path && root ? relative(root, tab.path).split('/') : []
 
+  const [shareOpen, setShareOpen] = useState(false)
+  const [sharing, setSharing] = useState(false)
+
+  // The title bar shows a live share even when the dialog is closed, so a
+  // public link is never running unnoticed.
+  useEffect(() => {
+    void window.nova.share.status().then((s) => setSharing(s.state === 'live'))
+    return window.nova.share.onStatus((s) => setSharing(s.state === 'live'))
+  }, [])
+
   return (
+    <>
     <div className="titlebar">
       <button
         className="btn ghost sm"
@@ -81,6 +95,18 @@ export default function TitleBar() {
           <Shapes size={15} />
         </button>
         <button
+          className={`icon-btn ${sharing ? 'active' : ''}`}
+          title={
+            sharing
+              ? 'A share is live — open the panel to copy the link or stop it'
+              : 'Share this project, or a request collection, over a public link'
+          }
+          onClick={() => setShareOpen(true)}
+          disabled={!root}
+        >
+          <Share2 size={15} />
+        </button>
+        <button
           className="icon-btn"
           title="Open browser preview"
           onClick={() =>
@@ -124,6 +150,8 @@ export default function TitleBar() {
           <Terminal size={15} />
         </button>
       </div>
-    </div>
+      </div>
+      {shareOpen && <ShareDialog onClose={() => setShareOpen(false)} />}
+    </>
   )
 }

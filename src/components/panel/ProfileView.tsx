@@ -85,7 +85,7 @@ export default function ProfileView() {
               {profile.durationMs.toFixed(0)} ms · {profile.sampleCount} samples
             </span>
             {focus && (
-              <button className="link-btn" onClick={() => setFocus(null)}>
+              <button className="link-btn" title="Show the whole profile again" onClick={() => setFocus(null)}>
                 Reset zoom
               </button>
             )}

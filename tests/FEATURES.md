@@ -8,12 +8,11 @@ rendered DOM — not by calling store or IPC methods directly.
 **Status: 134/134 checks passing** (`npm run test:ui`, run against the live app),
 plus 20/20 in `verify-explorer.mjs` and 22/22 in `verify-tutorial.mjs`.
 
-Three sections need something on the machine before they can prove anything, and
+Two sections need something on the machine before they can prove anything, and
 say so rather than passing vacuously:
 
 | Section | Needs |
 |---|---|
-| 8. Browser pane | any server answering on `:4173` |
 | 10. Debugger | `debugpy` on `PATH` (`pip install debugpy`) |
 | 12, 13 | a language server for the fixture's languages; an authenticated AI CLI |
 

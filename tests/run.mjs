@@ -8,7 +8,8 @@
  * not part of `npm test`.
  */
 import { execFile } from 'node:child_process'
-import { mkdir } from 'node:fs/promises'
+import path from 'node:path'
+import { mkdir, symlink } from 'node:fs/promises'
 import { promisify } from 'node:util'
 import { BUILD, REPO, TMP } from './env.mjs'
 
@@ -33,6 +34,26 @@ const BUNDLES = [
   ['src/lib/postfix.ts', 'postfix'],
   ['src/lib/sqlTools.ts', 'sqlTools'],
   ['src/lib/codeDiagrams.ts', 'codeDiagrams'],
+  ['src/lib/semanticClassify.ts', 'semanticClassify'],
+  ['electron/lib/httpFile.ts', 'httpFile'],
+  ['electron/lib/httpAuth.ts', 'httpAuth'],
+  ['electron/lib/cookieJar.ts', 'cookieJar'],
+  ['electron/lib/httpClient.ts', 'httpClient'],
+  ['electron/lib/httpStream.ts', 'httpStream'],
+  ['electron/lib/graphql.ts', 'graphql'],
+  ['electron/lib/grpcClient.ts', 'grpcClient'],
+  ['electron/lib/httpScript.ts', 'httpScript'],
+  ['electron/lib/httpRunner.ts', 'httpRunner'],
+  ['electron/lib/jsonSchema.ts', 'jsonSchema'],
+  ['electron/lib/openapi.ts', 'openapi'],
+  ['electron/lib/mockServer.ts', 'mockServer'],
+  ['electron/lib/visualDiff.ts', 'visualDiff'],
+  ['src/lib/e2eRecorder.ts', 'e2eRecorder'],
+  ['src/lib/e2eCodegen.ts', 'e2eCodegen'],
+  ['electron/lib/secretScan.ts', 'secretScan'],
+  ['electron/lib/sast.ts', 'sast'],
+  ['electron/lib/sastRules.ts', 'sastRules'],
+  ['electron/lib/depAudit.ts', 'depAudit'],
 ]
 
 const OFFLINE = [
@@ -45,6 +66,12 @@ const OFFLINE = [
   'test-tutorial',
   'test-opencode',
   'test-format',
+  'test-semantic',
+  'test-http',
+  'test-grpc',
+  'test-apitest',
+  'test-e2e',
+  'test-security',
   'test-tools',
 ]
 const TOOLS = ['test-lsp', 'test-hier', 'test-dap-py']
@@ -53,6 +80,16 @@ const only = process.argv[2]
 const suites = only === 'offline' ? OFFLINE : only === 'tools' ? TOOLS : [...OFFLINE, ...TOOLS]
 
 await mkdir(BUILD, { recursive: true })
+
+// The bundles live outside the repo, so a module left external — grpc-js and
+// protobufjs — has nowhere to resolve from. Linking the real tree in is enough
+// for Node's resolver to walk up and find it.
+await symlink(path.join(REPO, 'node_modules'), path.join(BUILD, 'node_modules'), 'dir').catch(
+  (err) => {
+    if (err.code !== 'EEXIST') throw err
+  },
+)
+
 process.stdout.write(`building ${BUNDLES.length} modules → ${BUILD}\n`)
 for (const [src, out] of BUNDLES) {
   await exec(
@@ -67,6 +104,12 @@ for (const [src, out] of BUNDLES) {
       // Electron process — bundling it in crashes on a dynamic require. The stub
       // supplies the little of `app` the main-process modules actually use.
       '--alias:electron=./tests/stubs/electron.mjs',
+      // Both resolve parts of themselves at runtime, so they are required from
+      // node_modules rather than inlined — the same treatment the app gives
+      // them in vite.config.ts.
+      '--external:@grpc/grpc-js',
+      '--external:protobufjs',
+      '--external:js-yaml',
       `--outfile=${BUILD}/${out}.js`,
       '--log-level=error',
     ],

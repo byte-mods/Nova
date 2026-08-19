@@ -384,7 +384,7 @@ interface State {
   sidebarVisible: boolean
   aiVisible: boolean
   panelVisible: boolean
-  panelTab: 'terminal' | 'problems' | 'usages' | 'hierarchy' | 'tests' | 'debug' | 'todo' | 'coverage' | 'build' | 'profile' | 'infra'
+  panelTab: 'terminal' | 'problems' | 'usages' | 'hierarchy' | 'tests' | 'debug' | 'todo' | 'coverage' | 'build' | 'profile' | 'infra' | 'security'
 
   /** Last loaded coverage report, or null when none has been produced. */
   coverage: CoverageReport | null
@@ -731,6 +731,9 @@ export const useStore = create<State>((set, get) => ({
     await nova().lsp.setRoot(path)
     // Restores this project's saved breakpoints.
     await nova().debug.setRoot(path)
+    // The request client's cookie jar and history are per project, so they
+    // move with it rather than leaking a session between two checkouts.
+    await nova().http.setRoot(path)
     void nova().lsp.detect().then((servers) => set({ lspServers: servers }))
     await get().refreshGit()
     void get().refreshCommits()

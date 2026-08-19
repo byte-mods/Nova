@@ -8,6 +8,7 @@ import { monaco } from '@/lib/monacoSetup'
 import { registerCodeIntelligence, wordAt } from '@/lib/monacoProviders'
 import { REFACTORINGS } from '@/lib/refactor'
 import { clearActiveEditor, runRefactoring, setActiveEditor, siteFromEditor } from '@/lib/refactor/bridge'
+import { relative } from '@/lib/paths'
 import BlameGutter from './BlameGutter'
 import Breadcrumbs from './Breadcrumbs'
 
@@ -494,6 +495,19 @@ export default function CodeEditor({ path }: { path: string }) {
     return () => window.removeEventListener('nova:goto-line', goto)
   }, [path])
 
+  // Push where the editor is, so anyone watching a share follows along. The
+  // subscription is cheap when nothing is shared: the main process drops the
+  // update if there are no viewers.
+  useEffect(() => {
+    if (!buffer) return
+    const timer = setTimeout(() => {
+      void window.nova.share
+        .presence({ activeFile: relative(useStore.getState().root ?? '', path), content: buffer.content })
+        .catch(() => undefined)
+    }, 250)
+    return () => clearTimeout(timer)
+  }, [path, buffer?.content])
+
   if (!buffer) return <div className="empty-state">Loading…</div>
 
   const editorNode = (
@@ -521,6 +535,10 @@ export default function CodeEditor({ path }: { path: string }) {
         padding: { top: 12, bottom: 40 },
         scrollBeyondLastLine: false,
         bracketPairColorization: { enabled: true },
+        // Monaco's standalone themes report semantic highlighting as off, and
+        // the default 'configuredByTheme' believes them — so it has to be
+        // turned on explicitly or the semantic token providers never run.
+        'semanticHighlighting.enabled': true,
         guides: { bracketPairs: true, indentation: true },
         automaticLayout: true,
         stickyScroll: { enabled: true },

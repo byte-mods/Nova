@@ -3,6 +3,7 @@ import { DiffEditor } from '@monaco-editor/react'
 import { Columns2, FileText, Rows2, Undo2 } from 'lucide-react'
 import { useStore, type Tab } from '@/state/store'
 import { basename } from '@/lib/paths'
+import { enableSemanticHighlighting } from '@/lib/semanticTokens'
 
 export default function DiffView({ tab }: { tab: Tab }) {
   const settings = useStore((s) => s.settings)
@@ -57,6 +58,7 @@ export default function DiffView({ tab }: { tab: Tab }) {
           modified={diff.after}
           language={diff.language}
           theme={settings.themeId}
+          onMount={enableSemanticHighlighting}
           options={{
             renderSideBySide: !inline,
             fontSize: settings.fontSize,

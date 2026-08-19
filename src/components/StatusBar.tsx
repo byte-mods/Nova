@@ -62,7 +62,11 @@ export default function StatusBar() {
         </button>
       )}
 
-      <button className="status-item" onClick={() => useStore.getState().togglePanel('terminal')}>
+      <button
+        className="status-item"
+        title="Show the terminal (⌘J)"
+        onClick={() => useStore.getState().togglePanel('terminal')}
+      >
         <Terminal size={12} />
         Terminal
       </button>
@@ -125,7 +129,7 @@ export default function StatusBar() {
       <button
         className="status-item"
         onClick={() => useStore.getState().toggleAi()}
-        title={provider?.hint}
+        title={provider?.hint ?? `Toggle the AI console (⌘I) — ${provider?.label ?? 'no assistant configured'}`}
       >
         {provider?.available ? (
           <Sparkles size={12} style={{ color: 'var(--accent)' }} />
@@ -137,11 +141,15 @@ export default function StatusBar() {
 
       {tab?.kind === 'file' && tab.path && (
         <>
-          <span className="status-item">
+          <span className="status-item" title="Where the caret is: line and column">
             Ln {cursor.line}, Col {cursor.column}
           </span>
-          <span className="status-item">Spaces: {settings.tabSize}</span>
-          <span className="status-item">{languageForPath(tab.path)}</span>
+          <span className="status-item" title="Indent width, in spaces">
+            Spaces: {settings.tabSize}
+          </span>
+          <span className="status-item" title="The language this file is highlighted as">
+            {languageForPath(tab.path)}
+          </span>
         </>
       )}
 
@@ -153,7 +161,11 @@ export default function StatusBar() {
         {getTheme(settings.themeId).name}
       </button>
 
-      <span className="status-item" style={{ color: dirty ? 'var(--warning)' : undefined }}>
+      <span
+        className="status-item"
+        style={{ color: dirty ? 'var(--warning)' : undefined }}
+        title={dirty ? 'This file has changes that are not on disk (⌘S)' : 'Everything is saved'}
+      >
         {dirty ? 'Unsaved' : <Check size={12} />}
       </span>
     </div>

@@ -239,6 +239,7 @@ function EnvEditor({ env, onChange }: { env: Record<string, string>; onChange: (
             <button
               className="icon-btn"
               style={{ width: 22, height: 22 }}
+              title="Remove this variable"
               onClick={() => onChange(Object.fromEntries(rows.filter((_r, i) => i !== index)))}
             >
               <Trash2 size={12} />

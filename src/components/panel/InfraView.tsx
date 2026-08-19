@@ -142,7 +142,12 @@ function DockerTab({ available }: { available?: boolean }) {
             Include stopped
           </label>
         )}
-        <button className="icon-btn" style={{ marginLeft: 'auto' }} onClick={() => void refresh()}>
+        <button
+          className="icon-btn"
+          style={{ marginLeft: 'auto' }}
+          title="Refresh"
+          onClick={() => void refresh()}
+        >
           {busy ? <Loader2 size={13} className="spin" /> : <RefreshCw size={13} />}
         </button>
       </div>
@@ -305,7 +310,12 @@ function KubeTab({ available }: { available?: boolean }) {
           ))}
         </select>
 
-        <button className="icon-btn" style={{ marginLeft: 'auto' }} onClick={() => void refresh()}>
+        <button
+          className="icon-btn"
+          style={{ marginLeft: 'auto' }}
+          title="Refresh"
+          onClick={() => void refresh()}
+        >
           {busy ? <Loader2 size={13} className="spin" /> : <RefreshCw size={13} />}
         </button>
       </div>

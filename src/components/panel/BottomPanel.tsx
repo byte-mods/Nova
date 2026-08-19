@@ -1,16 +1,17 @@
 import { useState } from 'react'
 import {
   AlertTriangle,
-  ChevronsDown,
   Bug,
-  FlaskConical,
-  ListTodo,
-  ShieldCheck,
-  Hammer,
-  Flame,
+  ChevronsDown,
   Container,
+  Flame,
+  FlaskConical,
+  Hammer,
+  ListTodo,
   Network,
   Plus,
+  ShieldAlert,
+  ShieldCheck,
   Target,
   Terminal as TerminalIcon,
   Trash2,
@@ -28,6 +29,7 @@ import CoverageView from './CoverageView'
 import BuildView from './BuildView'
 import ProfileView from './ProfileView'
 import InfraView from './InfraView'
+import SecurityView from './SecurityView'
 
 export default function BottomPanel() {
   const height = useStore((s) => s.settings.panelHeight)
@@ -95,6 +97,12 @@ export default function BottomPanel() {
             onClick={() => useStore.getState().togglePanel('infra')}
           >
             <Container size={12} /> Infra
+          </button>
+          <button
+            className={`pane-tab ${panelTab === 'security' ? 'active' : ''}`}
+            onClick={() => useStore.getState().togglePanel('security')}
+          >
+            <ShieldAlert size={12} /> Security
           </button>
           <button
             className={`pane-tab ${panelTab === 'profile' ? 'active' : ''}`}
@@ -213,6 +221,7 @@ export default function BottomPanel() {
         {panelTab === 'build' && <BuildView />}
         {panelTab === 'profile' && <ProfileView />}
         {panelTab === 'infra' && <InfraView />}
+        {panelTab === 'security' && <SecurityView />}
         {panelTab === 'coverage' && <CoverageView />}
         {panelTab === 'problems' && <ProblemsView />}
         {panelTab === 'todo' && <TodoView />}

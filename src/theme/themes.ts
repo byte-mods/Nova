@@ -620,34 +620,62 @@ export function monacoThemeData(theme: Theme) {
     inherit: true,
     rules: [
       { token: '', foreground: strip(hex(c.text, '#cccccc')) },
+
+      /* Grammar tokens. Monarch matches longest-prefix on dots, so `string`
+       * also covers `string.escape`, `string.heredoc` and the rest. */
       { token: 'comment', foreground: strip(s.comment), fontStyle: 'italic' },
       { token: 'keyword', foreground: strip(s.keyword) },
-      { token: 'keyword.control', foreground: strip(s.keyword) },
       { token: 'storage', foreground: strip(s.keyword) },
       { token: 'string', foreground: strip(s.string) },
-      { token: 'string.quoted', foreground: strip(s.string) },
       { token: 'number', foreground: strip(s.number) },
       { token: 'constant', foreground: strip(s.constant) },
       { token: 'constant.numeric', foreground: strip(s.number) },
-      { token: 'constant.language', foreground: strip(s.constant) },
-      { token: 'entity.name.function', foreground: strip(s.func) },
-      { token: 'support.function', foreground: strip(s.func) },
+      { token: 'global', foreground: strip(s.constant) },
       { token: 'variable', foreground: strip(s.variable) },
-      { token: 'variable.parameter', foreground: strip(s.variable) },
+      { token: 'argument', foreground: strip(s.variable) },
       { token: 'type', foreground: strip(s.type) },
-      { token: 'type.identifier', foreground: strip(s.type) },
-      { token: 'entity.name.type', foreground: strip(s.type) },
+      { token: 'constructor', foreground: strip(s.type) },
       { token: 'identifier', foreground: strip(c.text) },
       { token: 'operator', foreground: strip(s.operator) },
       { token: 'delimiter', foreground: strip(c.textMuted) },
+      { token: 'interpolation', foreground: strip(s.operator) },
       { token: 'tag', foreground: strip(s.tag) },
       { token: 'metatag', foreground: strip(s.tag) },
-      { token: 'attribute.name', foreground: strip(s.attribute) },
+      { token: 'attribute', foreground: strip(s.attribute) },
       { token: 'attribute.value', foreground: strip(s.string) },
       { token: 'regexp', foreground: strip(s.regexp) },
       { token: 'annotation', foreground: strip(s.attribute) },
       { token: 'key', foreground: strip(s.tag) },
+      // Language builtins: `len`, `printf`, SQL's `COUNT`.
+      { token: 'predefined', foreground: strip(s.func) },
+
+      /* Semantic tokens, from `src/lib/semanticTokens.ts`. These are the rules
+       * that give functions and types their own colour — a Monarch grammar
+       * reports every name as `identifier`, so without this layer a function
+       * call is the same colour as the variable beside it, in every theme.
+       * Nova emits the bare type with no modifiers, so each name here is
+       * matched exactly as written. */
+      { token: 'function', foreground: strip(s.func) },
+      { token: 'method', foreground: strip(s.func) },
+      { token: 'macro', foreground: strip(s.func) },
+      { token: 'class', foreground: strip(s.type) },
+      { token: 'interface', foreground: strip(s.type) },
+      { token: 'struct', foreground: strip(s.type) },
+      { token: 'enum', foreground: strip(s.type) },
+      { token: 'typeParameter', foreground: strip(s.type) },
       { token: 'namespace', foreground: strip(s.type) },
+      { token: 'parameter', foreground: strip(s.variable) },
+      { token: 'property', foreground: strip(s.variable) },
+      { token: 'event', foreground: strip(s.variable) },
+      { token: 'enumMember', foreground: strip(s.constant) },
+      { token: 'modifier', foreground: strip(s.keyword) },
+      { token: 'decorator', foreground: strip(s.attribute) },
+
+      /* TextMate scope names, for grammars contributed by plugins. Monaco's
+       * own grammars never emit these. */
+      { token: 'entity.name.function', foreground: strip(s.func) },
+      { token: 'entity.name.type', foreground: strip(s.type) },
+      { token: 'support.function', foreground: strip(s.func) },
     ],
     colors: {
       'editor.background': hex(c.editorBg, '#1e1e1e'),

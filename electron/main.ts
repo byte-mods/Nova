@@ -13,6 +13,9 @@ import { registerCoverageHandlers, registerTestHandlers } from './ipc/tests'
 import { registerDebugHandlers } from './ipc/debug'
 import { registerPluginHandlers } from './ipc/plugins'
 import { registerHttpHandlers } from './ipc/http'
+import { registerE2eHandlers } from './ipc/e2e'
+import { registerSecurityHandlers } from './ipc/security'
+import { registerShareHandlers } from './ipc/share'
 import { registerBuildHandlers } from './ipc/build'
 import { registerStructuralHandlers } from './ipc/structural'
 import { registerDatabaseHandlers } from './ipc/database'
@@ -159,6 +162,9 @@ app.whenReady().then(() => {
   registerAiHandlers({ broadcast, mcpServers: plugins.mcpServers })
   registerShellHandlers({ broadcast })
   registerHttpHandlers({ broadcast })
+  registerE2eHandlers()
+  registerSecurityHandlers({ broadcast })
+  registerShareHandlers({ broadcast })
   registerBuildHandlers()
   registerStructuralHandlers()
   registerDatabaseHandlers()

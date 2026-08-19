@@ -42,7 +42,9 @@ export default defineConfig({
             rollupOptions: {
               // `node-pty` is a native module: it must stay a runtime require,
               // or Rollup inlines the JS and loses the .node binary beside it.
-              external: ['electron', 'node-pty'],
+              // `@grpc/grpc-js` and `protobufjs` are pure JS but resolve parts
+              // of themselves at runtime, which bundling breaks.
+              external: ['electron', 'node-pty', '@grpc/grpc-js', 'protobufjs'],
             },
           },
         },

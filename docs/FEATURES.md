@@ -23,6 +23,9 @@ UI, see [tests/FEATURES.md](../tests/FEATURES.md).
 - [Markdown](#markdown)
 - [Diagram designer](#diagram-designer)
 - [Built-in browser](#built-in-browser)
+- [UI testing](#ui-testing)
+- [Security scanning](#security-scanning)
+- [Sharing a session](#sharing-a-session)
 - [AI console](#ai-console)
 - [Terminal and run configurations](#terminal-and-run-configurations)
 - [Project structure](#project-structure)
@@ -35,7 +38,7 @@ UI, see [tests/FEATURES.md](../tests/FEATURES.md).
 - [Test coverage](#test-coverage)
 - [Profiler](#profiler)
 - [Build tools](#build-tools)
-- [HTTP client](#http-client)
+- [Request client](#request-client)
 - [Database console](#database-console)
 - [Docker, Kubernetes and SSH](#docker-kubernetes-and-ssh)
 
@@ -822,6 +825,266 @@ bridge.
 
 ---
 
+---
+
+## UI testing
+
+The browser pane is not only for looking at your app — it can watch what you do
+in it and write the test.
+
+### Recording
+
+**Record** in the browser toolbar injects a recorder into the page. Click, type,
+tick, select; **Save** writes it out as a Playwright spec under `e2e/`.
+
+Playwright's syntax rather than a format of Nova's own, deliberately: the point
+of recording is to get a test into the suite the project already runs. A
+bespoke format would need a bespoke runner, and the recording would only ever
+be useful inside this editor.
+
+A raw capture is a transcript — every keystroke its own step, and the click
+that focused a field in front of them — so it is collapsed before it is
+written. What comes out reads like something a person typed:
+
+```ts
+import { test, expect } from '@playwright/test'
+
+test('records a user flow', async ({ page }) => {
+  await page.goto('/')
+  await page.getByLabel('Email').fill('ada@example.com')
+  await page.getByLabel('Password').fill('hunter2')
+  await page.getByLabel('Remember me').check()
+  await page.getByTestId('submit').click()
+})
+```
+
+### Which selector it picks
+
+The locator is chosen for **durability**, which is the whole reason a recorder
+beats writing selectors by hand:
+
+1. a test id (`data-testid`, `data-test`, `data-qa`) — survives a redesign
+2. a role with its accessible name — survives a class rename
+3. a label, then a placeholder
+4. the element's own text
+5. an id, if it does not look generated — `#user-42` and hash-like ids are
+   skipped, because they change on the next build
+6. a scoped CSS path, last
+
+Two rules bend that order, and both come from what actually breaks at replay
+time. A **unique weak** locator beats an **ambiguous strong** one — `.first()`
+on a role that matched four buttons is a coin toss. And a role with no
+accessible name loses to a label, because `getByRole('checkbox')` is unique
+right up until the page grows a second checkbox.
+
+### Inspecting
+
+**Pick** highlights whatever is under the cursor and reports the selector a test
+would use for it, without clicking anything — inspecting a "Delete" button must
+not delete something. The strip shows the locator and whether it matched more
+than one element.
+
+### Visual regression
+
+**Capture** compares the page with its stored baseline, or creates one if there
+is none. Baselines live in `e2e/__screenshots__/` **in the project**, not in
+application data: a screenshot saying "this is what the page should look like"
+is a reviewable artefact and belongs in the same commit as the change that
+altered it.
+
+A failure writes a diff image beside the baseline — the old page dimmed, with
+changed pixels in magenta, so it is legible rather than a field of colour. The
+comparison is a pixel walk with a small per-channel tolerance, which absorbs
+font and gradient dithering without deciding for you which differences matter.
+A first run reports "baseline captured" rather than a pass, so a suite that
+never had baselines cannot look green forever.
+
+The page has to be visible to be captured. A `<webview>` produces no frames
+while it is hidden, and its own `capturePage()` never settles — the capture goes
+through the guest's debugger with a screencast, which asks for a frame instead
+of waiting for one.
+
+### Running E2E suites
+
+Playwright and Cypress are detected like any other test framework, so their
+suites run in the **Tests** panel alongside the unit tests, with per-test
+results and Rerun Failed. Playwright reports nest project, file and `describe`
+blocks arbitrarily deep; the tree is walked rather than read at two fixed
+levels, so a nested suite is not silently empty.
+
+
+---
+
+## Security scanning
+
+The **Security** panel scans the open project three ways and reports one list.
+Nothing leaves the machine except the dependency check, which sends package
+names and versions to the advisory database and nothing else — no source, no
+paths, no findings.
+
+### Code
+
+Pattern rules for the vulnerability classes that recur: SQL and command
+injection, `eval`, path traversal, XSS through `innerHTML` and
+`dangerouslySetInnerHTML`, wildcard CORS, disabled CSRF, MD5 and SHA-1, ECB and
+DES, disabled TLS verification, `Math.random` used for a token, unsafe
+deserialization, unverified JWTs, debug mode, and plaintext HTTP endpoints.
+Each carries its CWE and a fix.
+
+These are patterns, not dataflow, and the panel says so: **no code rule is ever
+reported as confirmed.** A pattern can see a query built by concatenation; it
+cannot see whether the value came from a request or a constant three files
+away. Reporting matches as facts is how a security tool loses its audience —
+two hundred findings that are mostly wrong get dismissed wholesale, including
+the four that were right.
+
+Rules are skipped inside comments, and `// nova-ignore`, `nosec` and
+`nosemgrep` suppress a line or the line beneath.
+
+### Secrets
+
+Two kinds of rule, deliberately different in character. **Known formats** — AWS
+key ids, GitHub, Slack, Stripe, Google, OpenAI and Anthropic keys, private-key
+headers, JWTs, connection strings with a password — have shapes nothing else
+has, and are reported as **confirmed**. **Assignment plus entropy** —
+`apiKey = "…"` where the value looks random — is never better than *likely*,
+because a long random string is also what a hash, a UUID and a checksum look
+like.
+
+UUIDs, digests, versions, paths, template placeholders and `.env.example` files
+are handled explicitly rather than left to an entropy threshold. Everything
+reported is **redacted** before it is displayed, keeping only the last four
+characters — enough to match against a provider's dashboard, which lists key
+suffixes for exactly this purpose.
+
+### Dependencies
+
+Lockfiles are read — npm, pnpm, yarn, pip, poetry, Cargo, Go, Bundler and
+Composer — and every pinned version is checked against
+[OSV.dev](https://osv.dev), which aggregates GitHub's database, the ecosystems'
+own, and the CVE feeds. A lockfile rather than a manifest, because a manifest
+range cannot be matched against an advisory without resolving it.
+
+This is the one thing the scanner reports as **confirmed**: a version sitting
+inside a published affected range is a fact, not a pattern. Each finding links
+its advisory and names the version to upgrade to. With no network the phase
+says so rather than quietly reporting nothing.
+
+### Reading the results
+
+Findings are ordered worst-first, and within a severity the ones that can be
+trusted first — a confirmed medium is worth more of an afternoon than a
+possible high. Confidence is spelled out in words next to each one, because
+"possible" beside a critical severity has to read as a caveat rather than a
+label.
+
+
+---
+
+## Sharing a session
+
+The **Share** button in the title bar gives the current session a public
+address, so someone else can look at it without installing anything. A local
+server is fronted by a [Cloudflare quick tunnel](https://developers.cloudflare.com/cloudflare-tunnel/)
+— outbound only, so it needs no account, no DNS, no port forwarding and no
+inbound firewall rule. It requires `cloudflared` on the PATH:
+
+```bash
+brew install cloudflared
+```
+
+Two things can be shared, and they are deliberately separate — sending someone
+an API collection should not also hand them the source tree.
+
+**The project.** A read-only view that follows the file you have open. Viewers
+browse the tree and watch the editor move as you work; the content is pushed
+over Server-Sent Events, and a viewer who clicks something themselves stops
+following rather than having the page yanked around.
+
+**A request collection.** With a `.http` file open, publish just that: the
+requests, their methods, URLs, headers and bodies, with `Authorization`,
+`Cookie` and `X-Api-Key` masked and file variables listed by name only. A
+`@token = …` line stays a name, never a value.
+
+### Live audio and video
+
+Either kind of share can also carry the presenter. In the dialog, tick any
+combination of **Screen**, **Camera** and **Microphone**, pick which screen or
+window if you chose Screen, and press **Go live**. Everyone holding the link
+sees and hears it in their browser — no account, no install, no plugin, and no
+second tool to arrange.
+
+The three are independent. A voice-only walkthrough of a shared project is a
+normal thing to want, and so is a silent screen. Screen and camera together
+arrive as a main view with the presenter inset, because the alternative —
+compositing them here — would bake a layout decision into the stream that the
+viewer cannot undo.
+
+**How it travels.** Capture runs in the renderer, `MediaRecorder` encodes to
+WebM, and the main process fans the segments out to viewers over the tunnel that
+is already open. WebRTC would cut the delay to a fraction, but only with a
+signalling path and a STUN/TURN server behind it — infrastructure that someone
+who typed `brew install cloudflared` has not agreed to run. This costs about a
+second of latency and needs nothing.
+
+Each request for media answers and **ends**, rather than one response held open
+for the length of the broadcast. That matters more than it sounds: proxies and
+scanning middleboxes routinely buffer a response until it completes, and on such
+a network a held-open stream delivers the whole broadcast in one lump at the
+end. A reply that finishes is forwarded immediately by everything in the path.
+The viewer page polls for the same reason, with Server-Sent Events as the fast
+path where they work.
+
+**What a late arrival gets.** The header the stream is decoded against is kept
+and handed to whoever joins next, followed by the live edge — so someone who
+opens the link ten minutes in starts watching immediately rather than staring at
+a player that cannot interpret what it is being sent.
+
+Nothing is recorded. A few seconds of recent media is held in memory so a viewer
+can catch up, and it is discarded when the broadcast stops. **Stop the
+broadcast** ends the audio and video and leaves the shared page up; **Stop
+sharing** takes down everything.
+
+On macOS the first broadcast triggers the system prompts for Screen Recording,
+Camera and Microphone. The capture also needs the window on screen — a fully
+occluded window produces no frames for the compositor to hand over.
+
+### What it exposes, and what it does not
+
+The share server is the thing that ends up on the public internet, so it is
+built around what it *cannot* do:
+
+- **No writes.** There is no endpoint that mutates anything — not gated behind
+  a permission, simply absent. A `POST` is refused before a path is considered.
+- **A token in every path.** 32 hex characters, new for each share. Without it
+  every route is a 404, including the index, so the URL is the whole credential
+  and a scan of `trycloudflare.com` finds nothing.
+- **Rooted path resolution.** Every read is resolved and confirmed to still sit
+  under the project root, so `..`, an absolute path, an encoded traversal and a
+  symlink all fail.
+- **Secrets withheld.** `.env` files, `.npmrc`, `.netrc`, private keys,
+  certificates and keystores are refused whatever the path asks for, and listed
+  back in the dialog so you can see what was held back.
+- **Loopback binding.** The local server listens on `127.0.0.1` only; the
+  tunnel is the sole way in.
+
+The dialog keeps the URL, the viewer count and **Stop sharing** in front of you
+the whole time, and the title-bar icon stays lit while a share is live — a
+public link should never be running unnoticed. Stopping closes the tunnel and
+the address stops answering immediately; quitting the app does the same.
+
+The link is unguessable but it is public. Send it to people, not to a channel
+that logs URLs.
+
+### What it is not
+
+This is a read-only view, not collaborative editing. Nobody on the other end
+can type into your project, and there is no merge, no cursor sharing and no
+second writer. That is a deliberate limit rather than an unfinished one: the
+useful case is "look at this with me for five minutes", and it is served
+without any of the machinery that shared editing would need.
+
+
 ## AI console
 
 The right-hand panel (`⌘I`) runs a coding agent **in your project directory with
@@ -893,6 +1156,33 @@ Monokai Pro, Gruvbox Dark, Midnight Ocean, GitHub Light and Solarized Light. Eac
 drives the whole application: chrome, editor, terminal, Mermaid diagrams and
 Markdown preview all change together. Three file-icon packs (Nova, Classic,
 Minimal) are switchable independently.
+
+### Semantic highlighting
+
+A grammar alone cannot colour a function name. Monaco's grammars classify
+keywords, strings, numbers and comments, and report every remaining word —
+function names, class names, parameters, locals — as one undifferentiated
+`identifier` token. No theme can separate what the grammar never separated, so
+every theme rendered a call the same colour as the variable beside it.
+
+Nova adds a semantic layer on top, with two sources:
+
+- **The language server**, asked for `textDocument/semanticTokens/full`. It has
+  resolved the file, so it knows a name is a method and not a field. Servers
+  are never waited on: a request that arrives before one has started uses the
+  fallback and is upgraded when `lsp:status` reports the server ready, because
+  a file that is grey for the ten seconds rust-analyzer takes to boot is worse
+  than one coloured approximately.
+- **A syntactic fallback**, for the languages with no server installed. It runs
+  over Monaco's own tokenization and reclassifies only the spans the grammar
+  gave up on — never a keyword or a string — marking the two shapes every
+  language shares: a name being called, and a name being declared as a function
+  or a type.
+
+Both feed one legend, so each theme writes one rule per token type
+(`function`, `class`, `parameter`, `enumMember` …) and it applies to every
+language. Servers that extend the standard legend, as rust-analyzer and clangd
+both do, are folded onto the closest type Nova paints.
 
 Settings cover font size and family, tab size, word wrap, minimap, line numbers,
 inlay hints, blame gutter, breadcrumbs, code vision, auto-save, the code style
@@ -1033,12 +1323,228 @@ Make. Tasks run in the terminal. Dependency trees are read from the build file
 where possible and resolved with the real tool on request — Gradle's conflict
 resolutions (`1.0 -> 2.0`) are shown as such.
 
-## HTTP client
+## Request client
 
-Open a `.http` or `.rest` file and press **Requests** in the tab strip. The
-IntelliJ/REST-Client format: `###` separators, `@vars`, `{{substitutions}}`, and
-environments from `http-client.env.json` (overlaid by
-`http-client.private.env.json`, so secrets stay out of version control).
+Open a `.http` or `.rest` file and press **Requests** in the tab strip. The base
+format is the one IntelliJ and the VS Code REST Client share — `###`
+separators, `@vars`, `{{substitutions}}`, and environments from
+`http-client.env.json` (overlaid by `http-client.private.env.json`, so secrets
+stay out of version control). A file written for either of those tools opens
+here unchanged.
+
+Everything past plain HTTP is an additive extension, chosen so a file that uses
+none of it still parses identically elsewhere: extra verbs in the method slot,
+`# @directive` lines that read as comments to any other tool, and block markers
+inside the body.
+
+Requests run in the main process, so they are not subject to the page's origin
+policy — an editor that could only call CORS-permissive APIs would be useless
+for the local backends these files point at.
+
+### Protocols
+
+| Verb | What it does |
+|---|---|
+| `GET` / `POST` / … | REST, with redirects followed by hand so cookies apply at every hop |
+| `GRAPHQL` | Sends a query with its variables, and browses the server's schema |
+| `WEBSOCKET` (or `WS`) | Opens a socket you can type into, with a message log |
+| `SSE` | Reads an event stream, reassembling events split across packets |
+| `GRPC` | Calls a service, unary or streaming, over a proto file or reflection |
+
+```http
+GRAPHQL {{base}}/graphql
+
+query Users($limit: Int) { users(limit: $limit) { id name } }
+
+--variables
+{ "limit": 10 }
+
+### A gRPC call — the method comes after the address
+GRPC localhost:50051 billing.Orders/Compute
+# @proto ./billing.proto
+
+{ "items": 3 }
+```
+
+gRPC discovers what a server offers two ways, because in practice you have one
+or the other: a `.proto` file, which is exact and works offline, or **server
+reflection**, which needs nothing but the address. Reflection is tried first
+when no proto is named. All four call shapes work — unary, server-streaming,
+client-streaming and bidirectional — and messages cross as JSON using
+protobuf's own mapping, so a `bytes` field is base64 and a 64-bit integer is a
+string, the same text `grpcurl` would show.
+
+### Auth
+
+`# @auth` above a request, with the credential normally coming from an
+environment variable rather than the file:
+
+```http
+# @auth bearer {{token}}
+# @auth basic ada {{password}}
+# @auth apikey header X-Api-Key {{key}}
+# @auth oauth2 grant=client_credentials token_url={{idp}}/token client_id={{id}} client_secret={{secret}} scope=read
+```
+
+OAuth2 supports the two grants that complete without a browser, and caches the
+token until it expires — a file with twenty requests against one API fetches
+one token, not twenty. Authorization Code needs a redirect the editor cannot
+own, so a token obtained elsewhere is pasted in as `bearer` instead.
+Credentials are redacted wherever a request is displayed back, so a live token
+never ends up on screen or in a screenshot of it.
+
+### Cookies
+
+A jar is kept per project — two checkouts pointing at the same staging host
+never see each other's session. It is applied and harvested at every hop of a
+redirect, which is where a login flow actually sets its session; without that,
+`### log in` followed by `### read my profile` could never work. **Cookies** in
+the toolbar shows what is stored and clears it.
+
+### Bodies
+
+```http
+POST {{base}}/import
+
+< ./payload.json
+```
+
+```http
+POST {{base}}/files
+
+--form
+name: avatar
+filename: ./avatar.png
+type: image/png
+--form
+name: caption
+value: My avatar
+```
+
+Uploads are read at send time rather than at parse time, so a large file never
+sits in the parse tree. A body with no `Content-Type` gets one inferred from
+its shape or the file's extension; an explicit header always wins.
+
+### Other directives
+
+`# @name` renames a request, `# @timeout 5000` overrides the default 60s,
+`# @no-redirect` returns the 302 itself, `# @no-cookies` opts out of the jar,
+`# @send` gives a WebSocket a message to deliver as soon as it opens, and
+`# @proto` points gRPC at a schema. An unrecognised directive is treated as the
+comment it looks like, so annotations meant for other tools are not rejected.
+
+### Reading the result
+
+The response pane shows the status, timing, size, headers, the redirect chain,
+the cookies a response set, and the request **as actually sent** after auth and
+interpolation. A GraphQL failure is called out separately: it arrives as a 200
+with an `errors` array, and a client that only reads the status code reports
+success on every failure.
+
+Streaming protocols get a message log instead — each message with its direction
+and timestamp — and a box to send into, for sockets and client-streaming gRPC.
+
+**History** keeps the last 200 runs per project and can reopen any stored
+response. The index and the bodies are stored apart, so opening the panel does
+not load megabytes of payload nobody asked for.
+
+### Assertions and chaining
+
+A request file becomes a test suite through two script blocks, in IntelliJ's
+syntax — `< {% %}` before the request, `> {% %}` after the response:
+
+```http
+### Log in
+POST {{base}}/login
+
+{ "user": "ada", "password": "{{password}}" }
+
+> {%
+  nova.test('returns a token', () => nova.expect(nova.response.status).toBe(200))
+  nova.vars.set('token', nova.response.json().access_token)
+%}
+
+### Read the profile the token belongs to
+GET {{base}}/me
+Authorization: Bearer {{token}}
+
+> {%
+  nova.test('is the right user', () => nova.expect(nova.response.json().name).toBe('Ada'))
+  nova.test('was quick', () => nova.expect(nova.response.time).toBeLessThan(500))
+%}
+```
+
+`nova.vars.set` is what makes the second request possible: what one response
+handler captures is a `{{variable}}` for every request after it. **Run all**
+runs the file in order with that scope around it, and running one request keeps
+the scope too.
+
+Available in a response script: `nova.response` (`status`, `headers` in lower
+case, `body`, `json()`, `time`, `size`), `nova.test(name, fn)`,
+`nova.expect(...)` with `toBe`, `toEqual`, `toContain`, `toMatch`,
+`toBeGreaterThan`, `toBeLessThan`, `toBeDefined`, `toBeTruthy`, `toHaveLength`,
+`toHaveProperty` and `.not` on any of them, plus `nova.vars` and `nova.log`. A
+pre-request script gets `nova.request`, which it can rewrite.
+
+A failing assertion fails its own test and nothing else — the twelve checks
+after the first failure are exactly the ones you want to see. Scripts run in a
+`vm` context with no `require`, no `process` and no filesystem, and are stopped
+after five seconds, so a `while (true)` in a handler cannot take the window
+with it.
+
+### Data-driven runs
+
+```http
+### One case per row
+# @data ./cases.csv
+POST {{base}}/users
+
+{ "name": "{{name}}", "role": "{{role}}" }
+```
+
+Each row of a CSV or JSON file becomes a set of variables and one run of the
+request, reported as its own step.
+
+### OpenAPI
+
+**Import** reads a JSON or YAML spec — OpenAPI 3 or Swagger 2 — and writes a
+`.http` file from it: one request per operation, path parameters as
+`{{variables}}`, request bodies sampled from their schemas, and a status
+assertion on each. The result is an ordinary request file, not a linked
+artifact; it is yours to edit from that point on.
+
+`# @spec ./openapi.yaml` on a request goes the other way, checking the response
+body against the schema the operation declares. This is the check a status code
+cannot make: a perfectly good 200 that dropped a field, changed a type, or
+started returning null where the schema says it never will.
+
+The validator handles a documented subset of JSON Schema — types (including
+OpenAPI's `nullable`), `required`, `properties`, `additionalProperties`,
+`items`, `enum`, `const`, `format`, the numeric and length bounds, `pattern`,
+`uniqueItems`, `allOf`/`anyOf`/`oneOf`/`not`, and local `$ref`. Anything it does
+not check it **says** it did not check, rather than reporting a pass over a
+schema it half-read.
+
+### Mock server
+
+**Mock** serves a spec's own example responses on a local port, so a client can
+be written before the backend exists. Responses come from an `example`, then a
+named entry under `examples`, then a value generated from the schema —
+generating last, because a hand-written example says something a generated one
+cannot. `?__status=404` asks for a particular response, which is the only way
+to exercise an error path against a mock. It binds to loopback only.
+
+### Running in CI
+
+```bash
+npm run api -- api/ --env staging
+```
+
+The same parser, executor, script runtime and cookie jar as the panel — a suite
+that passes in the editor passes here, and the reverse. Point it at a file or a
+directory, and it exits non-zero if anything failed. `--bail` stops at the first
+failure, `--reporter json` prints machine-readable results, and a request with
+no assertions is reported as such rather than counted as a pass.
 
 ## Database console
 

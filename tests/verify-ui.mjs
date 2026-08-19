@@ -8,6 +8,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { connect, reporter } from './cdp.mjs'
 import { TMP } from './env.mjs'
+import { startPageServer } from './stubs/page-server.mjs'
 
 const PROJECT = path.join(TMP, 'ui-demo')
 const only = process.argv[2] ? Number(process.argv[2]) : null
@@ -690,16 +691,23 @@ async function section5() {
     // to be expanded. Asserting on the row's textContent instead reported a
     // missing separator that does not exist — the two labels are separate
     // elements with a margin between them.
+    // `toggleSuggestionDetails` is a toggle and Monaco remembers the choice for
+    // the rest of the session, so a section that ran earlier and expanded the
+    // pane would leave this one collapsing it again. Converge on expanded
+    // instead of assuming which way the toggle points.
     const info = await cdp.evaluate(`
       const { monaco } = await import('/src/lib/monacoSetup.ts')
-      monaco.editor.getEditors()[0].trigger('test', 'toggleSuggestionDetails', {})
-      await new Promise(res => setTimeout(res, 500))
+      const editor = monaco.editor.getEditors()[0]
+      const paneText = () => document.querySelector('.suggest-details')?.textContent?.trim() ?? ''
+      for (let attempt = 0; attempt < 2 && !paneText(); attempt++) {
+        editor.trigger('test', 'toggleSuggestionDetails', {})
+        await new Promise(res => setTimeout(res, 600))
+      }
       const row = [...document.querySelectorAll('.suggest-widget .monaco-list-row')]
         .find(e => e.textContent.includes('OrderService'))
       const icon = row ? [...row.querySelectorAll('*')].map(e => e.className).join(' ') : ''
       const origin = row ? (row.querySelector('.details-label')?.textContent ?? '') : ''
-      const pane = document.querySelector('.suggest-details')?.textContent ?? ''
-      return { icon, origin, pane }
+      return { icon, origin, pane: paneText() }
     `)
     const kind = /codicon-symbol-class/.test(info.icon) || /class/i.test(info.pane)
     return {
@@ -911,6 +919,7 @@ async function section7() {
 async function section8() {
   console.log('\n── 8. Browser pane ──')
   await reset()
+  const site = await startPageServer()
 
   await r.guard('8.1', 'opens from the title bar', async () => {
     await cdp.click('[title^="Open browser preview"]', { settle: 2000 })
@@ -921,11 +930,11 @@ async function section8() {
     const box = await cdp.boxOf('.browser-address input')
     await cdp.clickPoint(box, { clickCount: 3 })
     await cdp.sleep(200)
-    await cdp.type('http://localhost:4173/')
+    await cdp.type(`${site.origin}/`)
     await cdp.key('Enter')
     await cdp.sleep(3000)
     const url = await cdp.evaluate(`const w=document.querySelector('webview'); return w?w.getURL():''`)
-    return { ok: url.includes('4173'), detail: url }
+    return { ok: url.includes(String(site.port)), detail: url }
   })
 
   await r.guard('8.3', 'renders the page (real DOM in the guest)', async () => {
@@ -940,7 +949,7 @@ async function section8() {
   await r.guard('8.4', 'back / forward / reload work', async () => {
     await cdp.evaluate(`
       const w=document.querySelector('webview')
-      await w.loadURL('http://localhost:4173/?second=1')
+      await w.loadURL('${site.origin}/?second=1')
       return true`, 30000)
     await cdp.sleep(2500)
     const canBack = await cdp.evaluate(`return document.querySelector('webview').canGoBack()`)
@@ -960,6 +969,8 @@ async function section8() {
     await cdp.clickText('.browser-toolbar .segmented button', 'Fit', { settle: 600 })
     return { ok: narrow < wide, detail: `${wide} -> ${narrow}` }
   })
+
+  await site.close()
 }
 
 /* ================================================================== */

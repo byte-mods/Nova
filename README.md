@@ -2,13 +2,13 @@
 
 # Nova
 
-**A desktop IDE that brings IntelliJ-grade code intelligence, a Chromium browser, a diagram designer and an AI pair to one window — with no language server required.**
+**A desktop IDE that brings IntelliJ-grade code intelligence, an API client, a browser, a security scanner and an AI pair to one window — then shares the whole session, screen and voice included, over a link.**
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Electron](https://img.shields.io/badge/Electron-43-47848F?logo=electron&logoColor=white)](https://www.electronjs.org/)
 [![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)](https://react.dev/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.5-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-[![Tests](https://img.shields.io/badge/tests-134%20UI%20%2B%20399%20offline-brightgreen.svg)](tests/FEATURES.md)
+[![Tests](https://img.shields.io/badge/tests-405%20live%20%2B%20748%20offline-brightgreen.svg)](tests/FEATURES.md)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%C2%B7%20Linux%20%C2%B7%20Windows-lightgrey.svg)](docs/INSTALLATION.md)
 
 <img src="docs/screenshot.png" alt="Nova IDE — editor, project tree, symbol index and the Explain button" width="100%">
@@ -22,9 +22,10 @@
 Nova is a full IDE in an Electron window: the Monaco editor, a project-wide symbol
 index, twenty-three refactorings, a debugger, a test runner, Git with a
 three-way merge editor, a real Chromium pane, a UML/architecture diagram
-designer, and an AI console wired to the `claude` and `codex` CLIs.
+designer, an API client, an end-to-end test recorder, a security scanner, a
+plugin host, and an AI console wired to the `claude` and `codex` CLIs.
 
-Two things make it unusual:
+Three things make it unusual:
 
 **It works with nothing installed.** The whole project is indexed on open by a
 per-language declaration parser, and that index — not a language server — drives
@@ -36,6 +37,11 @@ and everything becomes type-aware; don't, and it still works.
 **It explains itself.** An **Explain** button above any open file generates a
 full walkthrough of that code — the theory behind it, a step-by-step trace,
 live Mermaid system-design diagrams, and a build-it-yourself tutorial.
+
+**It shares itself.** One button opens a Cloudflare tunnel and turns the session
+into a link. Whoever holds it watches the project read-only in a browser — and,
+if you want, your screen, camera and voice along with it. No account, no
+install, nothing to join.
 
 ---
 
@@ -100,6 +106,13 @@ it indexes the tree on open.
 Nothing else is required. Language servers, debug adapters and the `claude` /
 `codex` CLIs are all optional: Nova probes your `PATH` at startup, uses whatever
 it finds, and lists the rest in **Settings** with an install command for each.
+
+Sharing a session over a public link is the one feature with an outside
+dependency — it needs `cloudflared`, and says so in the dialog if it is missing:
+
+```bash
+brew install cloudflared
+```
 
 > **npm 10.9+ blocks install scripts**, so Electron's binary may not download.
 > If you see `Electron failed to install correctly`, run
@@ -254,6 +267,344 @@ Ctrl+C interrupts the foreground job rather than the shell.
   the AI's. Browse, diff and restore any revision.
 - **Ten themes** driving the whole application, and three file-icon packs.
 
+### An API client, in the repository
+
+A `.http` file *is* the collection. It sits next to the code it exercises, it
+diffs, and it merges — which is the part a GUI client with its own private
+database cannot do.
+
+- **HTTP, GraphQL, gRPC and WebSocket** in one format, with a cookie jar that
+  survives redirects, seven auth schemes, file uploads and multipart bodies.
+- **Assertions and chaining** — a `> {% … %}` block after a request runs tests
+  against the response and captures values for later requests to use.
+- **Environments and variables**, resolved per run, kept out of the file.
+- **Data-driven runs** — point a request at a CSV or JSON file and it runs once
+  per row.
+- **OpenAPI import** turns a spec into a request file; **the mock server** serves
+  that spec back, so a client can be built before the API exists.
+- **History** — every response kept, reopenable, diffable.
+
+### Testing tools
+
+- **Unit tests** — nine frameworks detected and run from the tree, with a green
+  ▶ in the gutter for a single test, and **coverage** overlaid on the editor.
+- **API tests** — run one request, a whole file, or every collection in the
+  project, with a results panel that shows both sides of a failed assertion.
+- **End-to-end** — record a real interaction in the browser pane and it writes a
+  **Playwright** spec, choosing locators the way a person would (label, role,
+  test id) rather than emitting brittle CSS paths.
+- **Visual regression** — capture a page, and every later capture is compared to
+  that baseline with a diff image written next to it for review.
+- **Security** — secret scanning, a SAST pass with CWE-tagged findings, and a
+  dependency audit across nine lockfile ecosystems, each finding rated by
+  confidence and paired with the fix.
+
+### Sharing a session — screen, camera and voice
+
+**Share** in the title bar opens a Cloudflare tunnel and gives the session a
+public address. Two things can be shared, deliberately separately: the project
+as a live read-only view that follows the file you are looking at, or a single
+request collection as a browsable page with credentials masked.
+
+Either one can carry **live audio and video**. Tick any combination of
+**Screen**, **Camera** and **Microphone**, press **Go live**, and everyone
+holding the link watches in their browser — no account, no install, no plugin. A
+screen and a camera together arrive as a main view with the presenter inset.
+
+It is read-only in the strongest sense: the share server has no endpoint that
+writes anything. `.env` files, keys and certificates are refused and listed back
+to you, every path is resolved and confirmed to be inside the project, and the
+32-character token in the URL is the whole credential — without it every route,
+including the index, is a 404.
+
+### Plugins
+
+A plugin is a git repository with a `nova-plugin.json`. Nova clones it, reads the
+manifest, and runs its code in a **separate host process** — never in the main
+process and never in the renderer — so a plugin that throws, leaks or spins
+cannot take the editor down with it.
+
+Nothing is granted implicitly. A plugin declares the permissions it wants, you
+see them before installing, and a call it was not granted fails at the call site
+with the permission named. Plugins can add commands, views, status-bar items —
+and **MCP servers**, which hand the AI console new tools.
+
+---
+
+## Tutorial — every feature, and how to use it
+
+Walk this top to bottom on a real project and you will have used everything Nova
+does. Each step is written so it can be followed without reading the ones before
+it.
+
+<details>
+<summary><b>1 · Open a project and find your way around</b></summary>
+
+**Open a folder** from the title bar, or press `⌘O`. Nova indexes the whole tree
+on open — a 1,200-file project takes about half a second — and everything below
+depends on that index rather than on tooling you have to install.
+
+| Do this | To get |
+|---|---|
+| `⌘P` | any file by name, fuzzy-matched |
+| `⇧⌘O` | any symbol in the project, with its kind and container |
+| `⇧⌘F` | full-text search, with file masks and a replace preview |
+| double-tap `⇧` | search everywhere at once — files, symbols, actions, settings |
+| `⌘E` | the files you had open recently |
+| `⌘F12` | the structure of the current file |
+| `⌘B` · `⌘J` · `⌘I` | show or hide the sidebar, bottom panel and AI console |
+
+In the explorer, `⌘`-click and `⇧`-click select several files. Right-click gives
+**Find in Folder**, which opens search already scoped to it.
+
+</details>
+
+<details>
+<summary><b>2 · Navigate and edit code</b></summary>
+
+`⌘`-click (or `F12`) on any identifier jumps to its definition. `⌥F7` lists every
+usage, grouped by file and labelled *declaration*, *usage* or *import*. `⇧F12`
+peeks the references without leaving the file.
+
+Start typing and the completion popup offers symbols from the whole project, not
+just the open file — each entry shows its kind and the module it came from.
+Accepting one inserts the identifier. This works with no language server; install
+one and the same popup becomes type-aware.
+
+`F11` bookmarks the current line, `⇧F11` lists your bookmarks. `⌥⌘→` splits the
+editor. Tabs can be dragged, pinned, and closed with `⌘W`.
+
+If a file changes on disk while you have unsaved edits, a banner offers
+**Reload**, **Compare** or **Keep mine** — it will not silently pick one.
+
+</details>
+
+<details>
+<summary><b>3 · Refactor</b></summary>
+
+Put the caret where you want to work and press **`⌃T`** for *Refactor This*. It
+lists what applies here, and shows the rest greyed out with the reason.
+
+The common ones have direct bindings: `⇧F6` rename, `⌥⌘V` extract variable,
+`⌥⌘M` extract method, `⌥⌘C` extract constant, `⌘F6` change signature, `F6` move
+file, `⌘⌫` safe delete.
+
+Every refactoring ends in a preview — affected files, edit count, a per-file diff
+— before anything is written. If a change is not provably safe, Nova refuses and
+says why rather than writing something that looks right.
+
+**`⌥⌘L`** reformats, **`⌃⌥O`** optimises imports, `⌥⏎` offers quick fixes.
+
+</details>
+
+<details>
+<summary><b>4 · Run, debug and test</b></summary>
+
+Click the gutter beside a line to set a breakpoint; right-click it for a
+**condition**, a **hit count** or a **log message**. `F5` starts debugging, `F10`
+steps over, `F11` steps into, `⇧F5` stops. The panel gives you the call stack,
+scoped variables, watch expressions and a debug console. Breakpoints persist per
+project.
+
+Open the **Tests** panel and Nova detects the framework from the project itself —
+go, cargo, pytest, vitest, jest, rspec, PHPUnit, Gradle, Maven or npm. Results
+arrive as a tree with pass and fail counts and durations; the green ▶ in the
+gutter runs one test on its own. The **Coverage** panel overlays what ran onto
+the editor.
+
+**Run configurations** live in the run picker: environment, arguments, working
+directory, before-launch steps, and compound configurations that start several
+things at once.
+
+</details>
+
+<details>
+<summary><b>5 · Use the API client (a Postman collection that lives in git)</b></summary>
+
+Create a file ending in `.http` anywhere in the project:
+
+```http
+@baseUrl = https://api.example.com
+
+### List orders
+GET {{baseUrl}}/orders
+Authorization: Bearer {{token}}
+
+> {%
+  test('comes back ok', () => expect(response.status).toBe(200))
+  client.set('firstOrder', response.body[0].id)
+%}
+
+### Fetch that order
+GET {{baseUrl}}/orders/{{firstOrder}}
+```
+
+Open it and press **Requests** in the tab strip to get the client. From there:
+
+- **Send** one request, or **Run all** to execute the file top to bottom —
+  captured values flow from one request into the next.
+- **Environments** switch `@baseUrl` and friends without editing the file.
+- The response pane shows body, headers, cookies, timings and your assertion
+  results, and every run is kept in **History** to reopen or compare.
+- **GraphQL**, **gRPC** (from a `.proto` file or server reflection) and
+  **WebSocket** requests use the same file format.
+- **Import OpenAPI** turns a spec into a request file. **Mock** serves that spec
+  back on localhost so you can build against an API that does not exist yet.
+- Point a request at a CSV or JSON file to run it once per row.
+
+Because it is a file, the collection is reviewed in pull requests and merges like
+anything else.
+
+</details>
+
+<details>
+<summary><b>6 · Record an end-to-end test, and catch visual regressions</b></summary>
+
+Open the **browser pane** from the title bar and load your app. Press the
+**record** button in its toolbar and use the page normally — click, type, tick,
+select. Press stop and Nova writes a **Playwright** spec, picking locators the
+way a person would: `getByLabel`, `getByRole`, `getByTestId`, falling back to CSS
+only when nothing better exists.
+
+The **camera** button in the same toolbar compares the page to its baseline. The
+first press stores the baseline under `e2e/__screenshots__/`; every press after
+that reports how many pixels changed and writes a `.diff.png` beside it. Because
+baselines are in the project, they are reviewed in the same commit as the change
+that altered them.
+
+> The page has to be visible on screen to be captured — a fully occluded window
+> produces no frames for the compositor to hand over.
+
+</details>
+
+<details>
+<summary><b>7 · Scan for security problems</b></summary>
+
+Open the **Security** panel and press scan. Three passes run over the project:
+
+- **Secrets** — credentials committed by accident, with the false-positive cases
+  (examples, placeholders, test fixtures) filtered out rather than dumped on you.
+- **SAST** — injection, unsafe deserialisation and friends, each finding carrying
+  its **CWE** and a concrete fix.
+- **Dependencies** — lockfiles across nine ecosystems matched against advisories,
+  with the version to upgrade to and the advisory linked.
+
+Findings are ordered worst-first, and each states its **confidence** explicitly
+rather than implying it.
+
+</details>
+
+<details>
+<summary><b>8 · Ask the AI console, and have it explain the codebase</b></summary>
+
+`⌘I` opens the console. Pick **Claude**, **Codex** or a **local model** (OpenCode
++ Ollama) from the chevron. It runs in your project with full access, streams its
+tool calls, and turns every file it touches into a change card with a diff and a
+**revert** button — nothing lands unreviewed.
+
+Above any open file, **Explain** (`⌥⌘E`) generates a full walkthrough of that
+file: the concept behind it, a step-by-step trace, live Mermaid diagrams, the
+design decisions and what they cost, and exercises. **Tutorial** (`⇧⌥⌘E`) does the
+same for the whole repository in nine chapters. Both runs are read-only, so a
+walkthrough can never edit the thing it describes. **Save into project** writes
+them to `docs/`.
+
+</details>
+
+<details>
+<summary><b>9 · Share the session — screen, camera and voice</b></summary>
+
+Press **Share** in the title bar.
+
+1. Choose **the project** (a live read-only view that follows the file you are
+   looking at) or **a request collection** (that `.http` file as a browsable
+   page, credentials masked). Press **Start sharing**.
+2. Nova opens a Cloudflare tunnel and gives you a public URL. **Copy** it and
+   send it to whoever should watch. The link is the entire credential, so send it
+   to people rather than to a channel that logs URLs.
+3. To talk over it, tick any combination of **Screen**, **Camera** and
+   **Microphone** in *Live audio & video*, choose which screen or window if you
+   picked Screen, and press **Go live**. Everyone on the link now sees and hears
+   it in their browser — nothing to install on their side.
+4. **Stop the broadcast** ends the audio and video but leaves the shared page up.
+   **Stop sharing** closes the tunnel, and the URL stops working immediately.
+
+Anything Nova withheld — `.env` files, keys, certificates — is listed in the
+dialog, so you can see what your viewers are not getting.
+
+**Requires `cloudflared`:** `brew install cloudflared`. On macOS the first
+broadcast asks for Screen Recording, Camera and Microphone permission; grant it
+under *System Settings › Privacy & Security*.
+
+</details>
+
+<details>
+<summary><b>10 · Git, diagrams, database, infrastructure and history</b></summary>
+
+**Git** (`⇧⌘G`) gives a branch picker, per-file staging, commit, history, a
+commit viewer with colourised diffs, blame in the gutter, stash, revert,
+cherry-pick, reset, and a three-way merge editor for conflicts.
+
+**Diagrams** — create one from the title bar. `.nova-diagram.json` files open in
+a canvas with ten shapes, 50 icons, UML relationships and SVG/PNG export; drag to
+pan, `⌘`+scroll to zoom, `⌥` to bypass snapping. Mermaid sources get a live
+preview instead.
+
+**Database** and **Infra** panels connect to a database and to your container and
+cluster tooling from inside the IDE.
+
+**Local history** snapshots every overwrite independently of Git — including the
+AI's edits. Right-click a file › *Local History* to browse, diff and restore any
+revision.
+
+</details>
+
+<details>
+<summary><b>11 · Install a plugin, or write one</b></summary>
+
+Open the **Plugins** sidebar, paste a git URL and press **Install**. Expand
+*Branch and permissions* first if you want to grant less than the plugin asks
+for — it will still install, it just cannot do the things you withheld.
+
+To write one, put a `nova-plugin.json` at the root of a repository:
+
+```json
+{
+  "id": "dev.example.hello",
+  "name": "Hello",
+  "version": "1.0.0",
+  "main": "index.mjs",
+  "permissions": ["workspace:read", "ui"],
+  "contributes": {
+    "commands": [{ "id": "greet", "title": "Hello: Greet" }]
+  }
+}
+```
+
+```js
+export async function activate(nova) {
+  nova.commands.register('greet', async () => {
+    const files = await nova.workspace.list('.')
+    await nova.ui.showMessage(`${files.length} things in this project`)
+  })
+}
+```
+
+Install it straight from disk with a `file:///path/to/repo` URL — no need to push
+it anywhere first. The full API, every permission and the MCP contribution
+format are in **[docs/PLUGINS.md](docs/PLUGINS.md)**.
+
+</details>
+
+<details>
+<summary><b>12 · Make it yours</b></summary>
+
+**Settings** has ten themes that restyle the whole application, three file-icon
+packs, editor preferences, the language-server and debugger registries, and
+**Keymap** — where every shortcut listed below can be rebound.
+
+</details>
+
 ---
 
 ## Keyboard shortcuts
@@ -290,6 +641,7 @@ electron/
   main.ts              window, webview policy, IPC registration
   preload.ts           the contextBridge API exposed as window.nova
   ipc/                 app · fs · git · ai · shell · indexer · lsp · debug · tests
+                       http · e2e · security · share · plugins · infra · profile
   lib/
     parseSymbols.ts    per-language declaration extraction
     projectIndex.ts    the index engine: build, refresh, definitions, references
@@ -299,10 +651,24 @@ electron/
     debugSession.ts    breakpoints, stepping, stack, variables, evaluate
     testFrameworks.ts  detection, command building, result parsing
     localHistory.ts    per-file revision snapshots
+    httpFile.ts        the .http format: requests, variables, assertions
+    httpClient.ts      the request engine, cookie jar, auth, streams
+    grpcClient.ts      proto files and server reflection
+    mockServer.ts      an OpenAPI spec served back as a live API
+    sast.ts            static analysis, CWE-tagged
+    secretScan.ts      committed credentials, with false positives filtered
+    depAudit.ts        lockfiles across nine ecosystems vs advisories
+    shareServer.ts     the read-only public surface, and the media fan-out
+    tunnel.ts          cloudflared lifecycle
+    pluginHost.ts      the plugin fork, its rpc, and the permission gate
+  plugin-host/host.mjs third-party code runs here, and nowhere else
 shared/types.ts        the IPC contract, shared by both sides
+shared/share.ts        share modes, broadcast selection, the agreed media type
 src/
   lib/refactor/        the refactoring engine — pure, no DOM, fully testable
   lib/explain.ts       the Explain prompt contract
+  lib/shareBroadcast.ts screen/camera/microphone capture and encoding
+  lib/e2eRecorder.ts   interaction recording and locator choice
   state/store.ts       Zustand store: tabs, buffers, git, AI, settings
   components/          sidebar · editor · diagram · browser · ai · panel
 tests/                 offline suites + live-app suites driven over CDP
@@ -318,24 +684,48 @@ npm test
 
 | | |
 |---|---|
-| `npm run test:offline` | **399 checks** of pure logic — declaration parsing, the symbol index, the edit applier, test-framework detection, the **100-check refactoring suite**, the formatter and Optimize Imports, EditorConfig resolution, batch inspections, postfix completion, the SQL helpers, the generated diagrams, run-config composition, and the Explain and Tutorial prompt contracts |
-| `npm run test:tools` | real tooling — clangd + rust-analyzer over LSP, debugpy over DAP, inlay hints, call hierarchy. Skipped tools are reported, not silently passed |
+| `npm run test:offline` | **748 checks** of pure logic — declaration parsing, the symbol index, the edit applier, test-framework detection, the **100-check refactoring suite**, the formatter and Optimize Imports, EditorConfig resolution, batch inspections, postfix completion, the SQL helpers, the generated diagrams, run-config composition, semantic-token classification and encoding, the request client end to end against a local HTTP/SSE/WebSocket/GraphQL server, gRPC over both a proto file and server reflection, the assertion runtime and collection runner, OpenAPI import and contract validation, the mock server, the UI-test selector engine and Playwright codegen, Playwright and Cypress report parsing, the image diff, the secret and vulnerability scanners with their false-positive cases, lockfile parsing across nine ecosystems, advisory matching, and the Explain and Tutorial prompt contracts |
+| `npm run test:tools` | **37 checks** against real tooling — clangd + rust-analyzer over LSP, debugpy over DAP, inlay hints, call hierarchy. Skipped tools are reported, not silently passed |
 | `npm run test:ui` | **134 UI checks** driving the running app with real clicks and keystrokes over CDP — see [tests/FEATURES.md](tests/FEATURES.md) |
 
-Two more live-app suites run separately: `node tests/verify-explorer.mjs` (20
-checks over multi-select, scoped search and Safe Delete) and
-`node tests/verify-tutorial.mjs` (22 over the project tutorial).
+Eleven more live-app suites run separately, each against the running IDE:
 
-The UI suite asserts on rendered DOM after real input, not on store calls. It
-needs the app running with a debug port:
+| | |
+|---|---|
+| `verify-explorer.mjs` | **20** — multi-select, scoped search and Safe Delete |
+| `verify-tutorial.mjs` | **22** — the project tutorial |
+| `verify-tooltips.mjs` | **28** — every icon control in every sidebar view, every panel, both editors, the chrome and the dialogs explains itself on hover |
+| `verify-plugins.mjs` | **32** — installs a real plugin from a real git repository: the manifest, the fork, the permission gate, storage, contributed views and commands, disable/enable/uninstall, and the URLs it refuses |
+| `verify-broadcast.mjs` | **37** — opens a real tunnel, broadcasts real encoded media, and plays it back in a real Chromium over the public URL |
+| `verify-semantic.mjs` | **14** — reads the colour the browser actually computed for a function, a type and a plain variable across twelve languages, then checks an installed server's own tokens come through |
+| `verify-http.mjs` | **23** — the request client over the real IPC bridge: requests, redirects with cookies, auth, GraphQL, and WebSocket and SSE streams reaching a renderer listener |
+| `verify-apitest.mjs` | **17** — suite runs, chaining, data-driven rows, the results panel, OpenAPI import and the mock server |
+| `verify-e2e.mjs` | **19** — records a real interaction in the browser pane, checks the generated Playwright spec, then visual baselines and diffing |
+| `verify-security.mjs` | **25** — scans a deliberately vulnerable fixture, and checks the safe equivalent produces nothing |
+| `verify-share.mjs` | **34** — opens a real Cloudflare tunnel and fetches the public URL *from outside the app*: the token gate, path traversal, withheld secrets and the read-only surface |
+
+The live suites assert on rendered DOM after real input, not on store calls, and
+the networked ones fetch the public URL from outside the app rather than from
+inside it. They need the app running with a debug port, which this script sets up:
 
 ```bash
-NOVA_DEBUG_PORT=9223 npm run dev
+bash tests/restart-app.sh
 ```
 
 ```bash
 npm run test:ui
 ```
+
+Then any of the others by name:
+
+```bash
+node tests/verify-broadcast.mjs
+```
+
+`verify-share.mjs` and `verify-broadcast.mjs` need `cloudflared` and outbound
+HTTPS; `verify-broadcast.mjs` and the visual-regression part of `verify-e2e.mjs`
+need the IDE window left on screen, because an occluded window produces no
+frames to capture.
 
 ---
 

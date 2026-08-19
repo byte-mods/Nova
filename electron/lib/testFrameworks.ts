@@ -279,6 +279,129 @@ function jsRunner(id: string, label: string, bin: string): TestFramework {
 const vitest = jsRunner('vitest', 'vitest', 'vitest')
 const jest = jsRunner('jest', 'jest', 'jest')
 
+/* ---------------- end-to-end ---------------- */
+
+/**
+ * Playwright, which reports as JSON but nests suites arbitrarily deep — a
+ * project, then a file, then `describe` blocks — so the tree is flattened by
+ * walking it rather than by reading two fixed levels.
+ */
+const playwright: TestFramework = {
+  id: 'playwright',
+  label: 'playwright',
+  detect: (ctx) => {
+    const deps = { ...ctx.packageJson?.dependencies, ...ctx.packageJson?.devDependencies }
+    return Boolean(
+      deps?.['@playwright/test'] ||
+        deps?.playwright ||
+        ctx.rootFiles.has('playwright.config.ts') ||
+        ctx.rootFiles.has('playwright.config.js'),
+    )
+  },
+  command: (scope, ctx) => {
+    const args = ['--yes', 'playwright', 'test', '--reporter=json']
+    if (scope.kind === 'file' && scope.file) args.push(ctx.relative(scope.file))
+    // `-g` is a regex, so a union reruns exactly the failures in one process.
+    if (scope.kind === 'name' && scope.name) args.push('-g', scope.name)
+    if (scope.kind === 'names' && scope.names?.length) args.push('-g', nameUnion(scope.names, 'regex'))
+    return { command: 'npx', args }
+  },
+  parseFinal: (output) => {
+    const start = output.indexOf('{')
+    if (start === -1) return []
+    let parsed: any
+    try {
+      parsed = JSON.parse(output.slice(start, output.lastIndexOf('}') + 1))
+    } catch {
+      return []
+    }
+
+    const events: TestEvent[] = []
+
+    const walk = (suite: any, trail: string[]) => {
+      const here = suite.title ? [...trail, suite.title] : trail
+      for (const spec of suite.specs ?? []) {
+        // A spec runs once per project and per retry; the last result is the
+        // one that decided the outcome.
+        const test = spec.tests?.[spec.tests.length - 1]
+        const result = test?.results?.[test.results.length - 1]
+        const suiteName = here.join(' › ')
+        events.push({
+          type: 'result',
+          id: `${suiteName}::${spec.title}`,
+          name: spec.title,
+          suite: suiteName,
+          status: spec.ok ? 'pass' : result?.status === 'skipped' ? 'skip' : 'fail',
+          durationMs: result?.duration,
+          message:
+            result?.error?.message ??
+            (result?.errors ?? []).map((e: any) => e.message).join('\n') ??
+            undefined,
+        })
+      }
+      for (const child of suite.suites ?? []) walk(child, here)
+    }
+
+    for (const suite of parsed.suites ?? []) walk(suite, [])
+    return events
+  },
+}
+
+/**
+ * Cypress. Its JSON reporter is Mocha's, which reports a flat list with the
+ * full title already joined — so unlike Playwright there is no tree to walk.
+ */
+const cypress: TestFramework = {
+  id: 'cypress',
+  label: 'cypress',
+  detect: (ctx) => {
+    const deps = { ...ctx.packageJson?.dependencies, ...ctx.packageJson?.devDependencies }
+    return Boolean(
+      deps?.cypress ||
+        ctx.rootFiles.has('cypress.config.ts') ||
+        ctx.rootFiles.has('cypress.config.js') ||
+        ctx.rootFiles.has('cypress.json'),
+    )
+  },
+  command: (scope, ctx) => {
+    const args = ['--yes', 'cypress', 'run', '--reporter', 'json']
+    if (scope.kind === 'file' && scope.file) args.push('--spec', ctx.relative(scope.file))
+    return { command: 'npx', args }
+  },
+  parseFinal: (output) => {
+    const start = output.indexOf('{')
+    if (start === -1) return []
+    let parsed: any
+    try {
+      parsed = JSON.parse(output.slice(start, output.lastIndexOf('}') + 1))
+    } catch {
+      return []
+    }
+
+    const events: TestEvent[] = []
+    const add = (entry: any, status: 'pass' | 'fail' | 'skip') => {
+      const full = entry.fullTitle ?? entry.title ?? ''
+      const title = entry.title ?? full
+      events.push({
+        type: 'result',
+        id: `${full}`,
+        name: title,
+        // Mocha's fullTitle is the suite chain plus the title, so removing the
+        // title leaves the suite.
+        suite: full.endsWith(title) ? full.slice(0, full.length - title.length).trim() : '',
+        status,
+        durationMs: entry.duration,
+        message: entry.err?.message || undefined,
+      })
+    }
+
+    for (const entry of parsed.passes ?? []) add(entry, 'pass')
+    for (const entry of parsed.failures ?? []) add(entry, 'fail')
+    for (const entry of parsed.pending ?? []) add(entry, 'skip')
+    return events
+  },
+}
+
 /* ---------------- Ruby / PHP / Java ---------------- */
 
 const rspec: TestFramework = {
@@ -349,6 +472,10 @@ const npmScript: TestFramework = {
 export const FRAMEWORKS: TestFramework[] = [
   go,
   cargo,
+  // Ahead of the unit runners: a project with both should offer its E2E suite
+  // as a distinct choice rather than having it hidden behind vitest.
+  playwright,
+  cypress,
   vitest,
   jest,
   pytest,

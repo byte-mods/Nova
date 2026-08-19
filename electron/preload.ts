@@ -40,7 +40,33 @@ import type {
   PluginPermission,
   PluginRuntimeState,
 } from '../shared/plugin'
-import type { HttpEnvironments, HttpFile, HttpResponse } from '../shared/http'
+import type {
+  GraphqlSchema,
+  GrpcServices,
+  HistoryEntry,
+  HttpCollection,
+  HttpEnvironments,
+  HttpFile,
+  HttpResponse,
+  MockStatus,
+  OpenapiImport,
+  RunResult,
+  RunStep,
+  StoredCookie,
+  StreamMessage,
+  StreamStatus,
+} from '../shared/http'
+import type { SemanticTokensResult } from '../shared/semantic'
+import type { VisualComparison } from '../shared/e2e'
+import type { ScanOptions, ScanProgress, ScanResult } from '../shared/security'
+import type {
+  ShareBroadcastSelection,
+  ShareMediaChannel,
+  ShareOptions,
+  SharePresence,
+  ShareScreenSource,
+  ShareStatus,
+} from '../shared/share'
 import type { CoverageReport } from '../shared/coverage'
 import type { BuildProject, BuildTask, DependencyNode } from '../shared/build'
 import type {
@@ -270,6 +296,8 @@ const api = {
       ipcRenderer.invoke('lsp:signatureHelp', f, l, line, ch),
     documentSymbols: (f: string, l: string): Promise<any> =>
       ipcRenderer.invoke('lsp:documentSymbols', f, l),
+    semanticTokens: (f: string, l: string): Promise<SemanticTokensResult | null> =>
+      ipcRenderer.invoke('lsp:semanticTokens', f, l),
     workspaceSymbols: (language: string, query: string): Promise<any> =>
       ipcRenderer.invoke('lsp:workspaceSymbols', language, query),
     prepareRename: (f: string, l: string, line: number, ch: number): Promise<any> =>
@@ -446,11 +474,104 @@ const api = {
       ipcRenderer.invoke('coverage:args', frameworkId),
   },
   http: {
+    setRoot: (root: string): Promise<void> => ipcRenderer.invoke('http:setRoot', root),
     parse: (file: string): Promise<HttpFile> => ipcRenderer.invoke('http:parse', file),
     environments: (file: string): Promise<HttpEnvironments> =>
       ipcRenderer.invoke('http:environments', file),
+    collections: (root: string): Promise<HttpCollection[]> =>
+      ipcRenderer.invoke('http:collections', root),
     send: (file: string, requestId: string, environment: string | null): Promise<HttpResponse> =>
       ipcRenderer.invoke('http:send', file, requestId, environment),
+
+    /** WebSocket and SSE. Resolves with the id the stream reports under. */
+    openStream: (file: string, requestId: string, environment: string | null): Promise<string> =>
+      ipcRenderer.invoke('http:openStream', file, requestId, environment),
+    sendStream: (streamId: string, data: string): Promise<boolean> =>
+      ipcRenderer.invoke('http:sendStream', streamId, data),
+    /** Ends the sending half; a gRPC call then waits for its reply. */
+    closeStream: (streamId: string): Promise<void> =>
+      ipcRenderer.invoke('http:closeStream', streamId),
+    cancelStream: (streamId: string): Promise<void> =>
+      ipcRenderer.invoke('http:cancelStream', streamId),
+    streams: (): Promise<StreamStatus[]> => ipcRenderer.invoke('http:streams'),
+    onStreamMessage: (cb: (message: StreamMessage) => void) => on('http:streamMessage', cb),
+    onStreamStatus: (cb: (status: StreamStatus) => void) => on('http:streamStatus', cb),
+
+    graphqlSchema: (file: string, requestId: string, environment: string | null): Promise<GraphqlSchema> =>
+      ipcRenderer.invoke('http:graphqlSchema', file, requestId, environment),
+
+    grpcServices: (file: string, requestId: string, environment: string | null): Promise<GrpcServices> =>
+      ipcRenderer.invoke('http:grpcServices', file, requestId, environment),
+    /** gRPC calls are streams too, so a unary reply arrives as one message. */
+    grpcCall: (file: string, requestId: string, environment: string | null): Promise<string> =>
+      ipcRenderer.invoke('http:grpcCall', file, requestId, environment),
+
+    /** Runs a file — or one request with the run scope around it. */
+    run: (
+      file: string,
+      environment: string | null,
+      options?: { only?: string; bail?: boolean },
+    ): Promise<RunResult> => ipcRenderer.invoke('http:run', file, environment, options),
+    onRunStep: (cb: (e: { file: string; step: RunStep }) => void) => on('http:runStep', cb),
+    onRunDone: (cb: (result: RunResult) => void) => on('http:runDone', cb),
+
+    importOpenapi: (specFile: string): Promise<OpenapiImport> =>
+      ipcRenderer.invoke('http:importOpenapi', specFile),
+
+    mockStart: (specFile: string, port?: number): Promise<MockStatus> =>
+      ipcRenderer.invoke('http:mockStart', specFile, port),
+    mockStop: (): Promise<MockStatus> => ipcRenderer.invoke('http:mockStop'),
+    mockStatus: (): Promise<MockStatus> => ipcRenderer.invoke('http:mockStatus'),
+
+    history: (file?: string): Promise<HistoryEntry[]> => ipcRenderer.invoke('http:history', file),
+    historyBody: (id: string): Promise<HttpResponse | null> =>
+      ipcRenderer.invoke('http:historyBody', id),
+    historyClear: (): Promise<void> => ipcRenderer.invoke('http:historyClear'),
+
+    cookies: (): Promise<StoredCookie[]> => ipcRenderer.invoke('http:cookies'),
+    clearCookies: (domain?: string): Promise<void> =>
+      ipcRenderer.invoke('http:clearCookies', domain),
+  },
+  e2e: {
+    /** Compares a captured page with its stored baseline, creating one if absent. */
+    /** `contentsId` comes from the webview's `getWebContentsId()`. */
+    compareScreenshot: (root: string, name: string, contentsId: number): Promise<VisualComparison> =>
+      ipcRenderer.invoke('e2e:compareScreenshot', root, name, contentsId),
+    acceptScreenshot: (root: string, name: string, contentsId: number): Promise<boolean> =>
+      ipcRenderer.invoke('e2e:acceptScreenshot', root, name, contentsId),
+  },
+  security: {
+    /** Runs the enabled phases over the project and returns every finding. */
+    scan: (root: string, options: ScanOptions): Promise<ScanResult> =>
+      ipcRenderer.invoke('security:scan', root, options),
+    dependencies: (root: string): Promise<unknown[]> =>
+      ipcRenderer.invoke('security:dependencies', root),
+    onProgress: (cb: (progress: ScanProgress) => void) => on('security:progress', cb),
+  },
+  share: {
+    /** Whether `cloudflared` is on PATH; without it a share cannot be opened. */
+    available: (): Promise<boolean> => ipcRenderer.invoke('share:available'),
+    status: (): Promise<ShareStatus> => ipcRenderer.invoke('share:status'),
+    start: (root: string, options: ShareOptions): Promise<ShareStatus> =>
+      ipcRenderer.invoke('share:start', root, options),
+    stop: (): Promise<ShareStatus> => ipcRenderer.invoke('share:stop'),
+    /** Pushes the editor's position so viewers follow along. */
+    presence: (presence: SharePresence): Promise<ShareStatus> =>
+      ipcRenderer.invoke('share:presence', presence),
+    onStatus: (cb: (status: ShareStatus) => void) => on('share:status', cb),
+    onLog: (cb: (line: string) => void) => on('share:log', cb),
+
+    /** Screens and windows offered in the "what do you want to send" picker. */
+    screenSources: (): Promise<ShareScreenSource[]> => ipcRenderer.invoke('share:screenSources'),
+    /** Declares what is being sent, or `null` to stop. */
+    broadcast: (selection: ShareBroadcastSelection | null, error?: string): Promise<ShareStatus> =>
+      ipcRenderer.invoke('share:broadcast', selection, error),
+    /** One encoded chunk, on its way to every viewer of that channel. */
+    media: (channel: ShareMediaChannel, chunk: ArrayBuffer): void =>
+      ipcRenderer.send('share:media', channel, chunk),
+    /** Clears the remembered stream header before a new recorder starts. */
+    mediaReset: (channel: ShareMediaChannel): Promise<void> =>
+      ipcRenderer.invoke('share:mediaReset', channel),
   },
   plugins: {
     list: (): Promise<InstalledPlugin[]> => ipcRenderer.invoke('plugins:list'),

@@ -5,6 +5,7 @@ import type { HistoryRevision } from '@shared/types'
 import { useStore } from '@/state/store'
 import { basename, formatBytes } from '@/lib/paths'
 import { languageForPath } from '@/lib/language'
+import { enableSemanticHighlighting } from '@/lib/semanticTokens'
 
 /**
  * Local History: every overwrite of a file is snapshotted, so work can be
@@ -105,6 +106,7 @@ export default function HistoryView({ path }: { path: string }) {
               modified={current}
               language={languageForPath(path)}
               theme={settings.themeId}
+              onMount={enableSemanticHighlighting}
               options={{
                 readOnly: true,
                 renderSideBySide: true,

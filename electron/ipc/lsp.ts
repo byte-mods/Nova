@@ -65,6 +65,9 @@ export function registerLspHandlers(ctx: Ctx) {
   ipcMain.handle('lsp:documentSymbols', (_e, f: string, l: string) =>
     manager.documentSymbols(f, l),
   )
+  ipcMain.handle('lsp:semanticTokens', (_e, f: string, l: string) =>
+    manager.semanticTokens(f, l),
+  )
   ipcMain.handle(
     'lsp:executeCommand',
     (_e, language: string, command: string, args: unknown[]) =>

@@ -1,0 +1,283 @@
+/**
+ * Every icon control in the chrome explains itself on hover.
+ *
+ * An icon button with no tooltip is a guess. This walks each sidebar view and
+ * each bottom panel — a static scan of the source cannot, because half of
+ * these controls only exist once their view is mounted — and fails on anything
+ * a developer would have to click to identify.
+ *
+ * Start the app first:  bash tests/restart-app.sh
+ */
+import fs from 'node:fs/promises'
+import path from 'node:path'
+import { connect } from './cdp.mjs'
+import { TMP } from './env.mjs'
+
+const PROJECT = path.join(TMP, 'tooltip-demo')
+
+const cdp = await connect()
+
+await fs.rm(PROJECT, { recursive: true, force: true })
+await fs.mkdir(path.join(PROJECT, 'src'), { recursive: true })
+await fs.writeFile(path.join(PROJECT, 'package.json'), '{"name":"tooltip-demo","version":"1.0.0"}')
+await fs.writeFile(path.join(PROJECT, 'src', 'main.ts'), 'export function main() {\n  return 1\n}\n')
+await fs.writeFile(path.join(PROJECT, 'api.http'), '### Ping\nGET https://example.test/ping\n')
+
+let pass = 0
+let fail = 0
+
+function check(label, ok, detail = '') {
+  if (ok) {
+    pass++
+    console.log(`  PASS  ${label}`)
+  } else {
+    fail++
+    console.log(`  FAIL  ${label}${detail ? `\n        ${detail}` : ''}`)
+  }
+}
+
+// Set up the chrome explicitly rather than inheriting whatever the previous
+// suite left behind — the tree only renders when the sidebar is showing.
+await cdp.evaluate(`
+  const s = (await import('/src/state/store.ts')).useStore
+  s.setState({ sidebarVisible: true, sidebarView: 'explorer', panelVisible: true })
+  await s.getState().openProject(${JSON.stringify(PROJECT)})
+  s.setState({ sidebarVisible: true, sidebarView: 'explorer' })
+  return true
+`)
+await cdp.waitFor(`document.querySelectorAll('.tree-row').length > 0`, { label: 'file tree' })
+
+/**
+ * Controls a developer has to identify by sight. Text buttons are excluded:
+ * a button reading "Commit" needs no tooltip, and demanding one would be
+ * noise rather than help.
+ */
+const SELECTOR = '.icon-btn, .tab-action, .tab-close, .status-item, .activity-btn'
+
+async function untitledIn(label) {
+  return cdp.evaluate(`
+    const nodes = [...document.querySelectorAll(${JSON.stringify(SELECTOR)})]
+    const naked = nodes.filter((node) => {
+      if (node.title || node.getAttribute('aria-label')) return false
+      // A control whose own text already names it is self-explanatory.
+      const text = (node.textContent || '').trim()
+      return text.length < 3
+    })
+    return {
+      total: nodes.length,
+      naked: naked.map((n) => n.className + ' :: ' + (n.textContent || '').trim().slice(0, 20)),
+    }
+  `)
+}
+
+/* ------------------------------------------------------------------ */
+console.log('\n-- sidebar views --')
+/* ------------------------------------------------------------------ */
+
+for (const view of ['explorer', 'search', 'structural', 'git', 'diagrams', 'plugins', 'themes']) {
+  await cdp.evaluate(`
+    const s = (await import('/src/state/store.ts')).useStore
+    s.setState({ sidebarVisible: true, sidebarView: ${JSON.stringify(view)} })
+    return true
+  `)
+  await cdp.sleep(700)
+  const found = await untitledIn(view)
+  check(
+    `${view} — ${found.total} controls, all explained`,
+    found.naked.length === 0,
+    found.naked.join('\n        '),
+  )
+}
+
+/* ------------------------------------------------------------------ */
+console.log('\n-- bottom panels --')
+/* ------------------------------------------------------------------ */
+
+const PANELS = [
+  'terminal', 'problems', 'usages', 'hierarchy', 'tests',
+  'debug', 'todo', 'coverage', 'build', 'profile', 'infra', 'security',
+]
+
+for (const panel of PANELS) {
+  await cdp.evaluate(`
+    const s = (await import('/src/state/store.ts')).useStore
+    s.getState().showPanel(${JSON.stringify(panel)})
+    return true
+  `)
+  await cdp.sleep(600)
+  const found = await untitledIn(panel)
+  check(
+    `${panel} — ${found.total} controls, all explained`,
+    found.naked.length === 0,
+    found.naked.join('\n        '),
+  )
+}
+
+/* ------------------------------------------------------------------ */
+console.log('\n-- editors --')
+/* ------------------------------------------------------------------ */
+
+await cdp.evaluate(`
+  const s = (await import('/src/state/store.ts')).useStore
+  s.setState({ panelVisible: false })
+  await s.getState().openFile(${JSON.stringify(path.join(PROJECT, 'src', 'main.ts'))})
+  return true
+`)
+await cdp.sleep(1200)
+
+{
+  const found = await untitledIn('code editor')
+  check(`code editor — ${found.total} controls, all explained`, found.naked.length === 0, found.naked.join('\n        '))
+
+  // The tab strip is where the complaint started: Explain, Tutorial and the
+  // split control are icons or one-word labels with real consequences.
+  const strip = await cdp.evaluate(`
+    return [...document.querySelectorAll('.tab-action')].map((b) => ({
+      text: (b.textContent || '').trim().slice(0, 20),
+      title: b.title,
+    }))
+  `)
+  check(
+    'every tab-strip action names what it does',
+    strip.length > 0 && strip.every((b) => b.title && b.title.length > 8),
+    JSON.stringify(strip),
+  )
+}
+
+// Opened through the store rather than by clicking "Requests" and swallowing
+// the failure: a silently-missed click left this check reading an empty
+// toolbar and calling that a pass-worthy result, which is the opposite of what
+// a tooltip audit is for.
+const HTTP_FILE = path.join(PROJECT, 'api.http')
+await cdp.evaluate(`
+  const s = (await import('/src/state/store.ts')).useStore
+  await s.getState().openFile(${JSON.stringify(HTTP_FILE)})
+  s.getState().openTab({
+    id: 'http:' + ${JSON.stringify(HTTP_FILE)},
+    kind: 'http',
+    title: 'api.http — requests',
+    path: ${JSON.stringify(HTTP_FILE)},
+  })
+  return true
+`)
+await cdp.waitFor(`document.querySelector('.http-toolbar') !== null`, { label: 'request panel' })
+await cdp.sleep(600)
+
+{
+  const toolbar = await cdp.evaluate(`
+    return [...document.querySelectorAll('.http-toolbar .link-btn')].map((b) => ({
+      text: (b.textContent || '').trim(),
+      title: b.title,
+    }))
+  `)
+  check(
+    'every request-panel action explains itself',
+    toolbar.length >= 4 && toolbar.every((b) => b.title && b.title.length > 8),
+    JSON.stringify(toolbar),
+  )
+}
+
+/* ------------------------------------------------------------------ */
+console.log('\n-- the permanent chrome --')
+/* ------------------------------------------------------------------ */
+
+/** Icon controls inside one container, and which of them say nothing. */
+async function untitledWithin(selector) {
+  return cdp.evaluate(`
+    const root = document.querySelector(${JSON.stringify(selector)})
+    if (!root) return { missing: true, total: 0, naked: [] }
+    const nodes = [...root.querySelectorAll(${JSON.stringify(SELECTOR)}), ...root.querySelectorAll('button')]
+    const seen = new Set()
+    const naked = []
+    for (const node of nodes) {
+      if (seen.has(node)) continue
+      seen.add(node)
+      if (node.title || node.getAttribute('aria-label')) continue
+      if ((node.textContent || '').trim().length >= 3) continue
+      naked.push((node.className || 'button') + ' :: ' + (node.textContent || '').trim().slice(0, 20))
+    }
+    return { missing: false, total: seen.size, naked }
+  `)
+}
+
+for (const [label, selector] of [
+  ['title bar', '.titlebar'],
+  ['activity bar', '.activity-bar'],
+  ['status bar', '.statusbar'],
+]) {
+  const found = await untitledWithin(selector)
+  check(
+    `${label} — ${found.total} controls, all explained`,
+    !found.missing && found.naked.length === 0,
+    found.missing ? `no ${selector} in the DOM` : found.naked.join('\n        '),
+  )
+}
+
+/* ------------------------------------------------------------------ */
+console.log('\n-- the other editors --')
+/* ------------------------------------------------------------------ */
+
+await fs.writeFile(path.join(PROJECT, 'notes.md'), '# Notes\n\nSome prose.\n')
+await cdp.evaluate(`
+  const s = (await import('/src/state/store.ts')).useStore
+  await s.getState().openFile(${JSON.stringify(path.join(PROJECT, 'notes.md'))})
+  return true
+`)
+await cdp.sleep(1200)
+{
+  const found = await untitledIn('markdown')
+  check(`markdown editor — ${found.total} controls, all explained`, found.naked.length === 0, found.naked.join('\n        '))
+}
+
+await cdp.evaluate(`
+  const s = (await import('/src/state/store.ts')).useStore
+  s.getState().openTab({ id: 'browser:tips', kind: 'browser', title: 'Browser', url: 'about:blank' })
+  return true
+`)
+await cdp.sleep(1500)
+{
+  const found = await untitledIn('browser')
+  check(`browser pane — ${found.total} controls, all explained`, found.naked.length === 0, found.naked.join('\n        '))
+}
+
+/* ------------------------------------------------------------------ */
+console.log('\n-- dialogs --')
+/* ------------------------------------------------------------------ */
+
+// The share dialog is the one place a wrong click has a consequence outside
+// the machine, so every control in it has to say what it will do.
+// A modal left open by an earlier run covers the title bar, so the click that
+// is meant to open this one would land on the overlay and close that one
+// instead. Clear the screen first, then open deliberately.
+await cdp.evaluate(`
+  const overlay = document.querySelector('.overlay')
+  if (overlay) overlay.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+  await new Promise((r) => setTimeout(r, 400))
+  const btn = document.querySelector('[title^="Share this project"], [title^="A share is live"]')
+  if (btn) btn.click()
+  await new Promise((r) => setTimeout(r, 900))
+  return !!document.querySelector('.share-modal')
+`)
+{
+  const found = await untitledWithin('.share-modal')
+  check(
+    `share dialog — ${found.total} controls, all explained`,
+    !found.missing && found.naked.length === 0,
+    found.missing ? 'the share dialog did not open' : found.naked.join('\n        '),
+  )
+
+  // The broadcast controls only exist once a share is live, so they are audited
+  // in verify-broadcast.mjs, where a tunnel is already open.
+}
+
+// Leave the screen as it was found, so the next suite does not open behind a
+// modal it did not put there.
+await cdp.evaluate(`
+  const overlay = document.querySelector('.overlay')
+  if (overlay) overlay.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+  return true
+`)
+
+console.log(`\n${pass} passed, ${fail} failed`)
+await cdp.close()
+process.exit(fail ? 1 : 0)

@@ -5,6 +5,12 @@ import { LspClient } from './lspClient'
 import { SERVERS, serversForLanguage, type ServerSpec } from './lspRegistry'
 import { toolEnv, which, whichXcrun } from './env'
 import type { LspServerStatus } from '../../shared/types'
+import {
+  SEMANTIC_TOKEN_MODIFIERS,
+  SEMANTIC_TOKEN_TYPES,
+  type SemanticTokensLegend,
+  type SemanticTokensResult,
+} from '../../shared/semantic'
 
 export function pathToUri(filePath: string) {
   return pathToFileURL(filePath).toString()
@@ -94,6 +100,21 @@ const CLIENT_CAPABILITIES = {
     documentLink: { dynamicRegistration: true },
     selectionRange: { dynamicRegistration: true },
     foldingRange: { dynamicRegistration: true, lineFoldingOnly: true },
+    // Without this a server will not compute semantic tokens at all, and
+    // function and type names stay the same colour as every other word.
+    semanticTokens: {
+      dynamicRegistration: true,
+      requests: { range: false, full: { delta: false } },
+      tokenTypes: SEMANTIC_TOKEN_TYPES,
+      tokenModifiers: SEMANTIC_TOKEN_MODIFIERS,
+      formats: ['relative'],
+      // Nova paints one style per token, so a server that would otherwise
+      // send overlapping or multi-line tokens is asked not to.
+      overlappingTokenSupport: false,
+      multilineTokenSupport: false,
+      serverCancelSupport: true,
+      augmentsSyntaxTokens: true,
+    },
   },
 }
 
@@ -395,6 +416,50 @@ export class LspManager {
     return this.send(language, 'textDocument/documentSymbol', {
       textDocument: { uri: pathToUri(file) },
     })
+  }
+
+  /**
+   * Full-document semantic tokens, with the server's own legend attached.
+   *
+   * Deliberately does not start a server. Every other request may wait for one
+   * to boot, but highlighting is on screen: making the renderer wait would
+   * leave the file grey for however long sourcekit-lsp or rust-analyzer takes,
+   * which is worse than the syntactic fallback it would have used instead. The
+   * `lsp:status` broadcast asks the renderer to come back once a server is up.
+   *
+   * The legend has to travel with the data — a server orders its token types
+   * however it likes, so the indices in `data` mean nothing without it.
+   */
+  async semanticTokens(file: string, language: string): Promise<SemanticTokensResult | null> {
+    const spec = serversForLanguage(language).find((s) => this.available.has(s.id))
+    const session = spec ? this.sessions.get(spec.id) : undefined
+    if (!session || session.state !== 'ready') return null
+
+    const provider = session.capabilities.semanticTokensProvider as
+      | { legend?: SemanticTokensLegend; full?: boolean | { delta?: boolean } }
+      | undefined
+    if (!provider?.legend?.tokenTypes?.length || !provider.full) return null
+
+    let result: { data?: number[] } | null = null
+    try {
+      result = await session.client.request<{ data?: number[] }>(
+        'textDocument/semanticTokens/full',
+        { textDocument: { uri: pathToUri(file) } },
+        15_000,
+      )
+    } catch (err) {
+      this.events.onLog(session.spec.id, `textDocument/semanticTokens/full: ${(err as Error).message}\n`)
+      return null
+    }
+    if (!result?.data) return null
+
+    return {
+      legend: {
+        tokenTypes: provider.legend.tokenTypes,
+        tokenModifiers: provider.legend.tokenModifiers ?? [],
+      },
+      data: result.data,
+    }
   }
 
   workspaceSymbols(language: string, query: string) {

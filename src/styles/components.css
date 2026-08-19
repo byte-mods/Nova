@@ -2683,6 +2683,165 @@
   color: var(--danger);
 }
 
+/* Protocol tints on the method chip. The HTTP verbs above already carry their
+ * own colours; these give the non-HTTP protocols the same at-a-glance read. */
+.http-method.p-graphql { color: #e535ab; }
+.http-method.p-grpc { color: #7fdbca; }
+.http-method.p-websocket { color: #c586c0; }
+.http-method.p-sse { color: #ffcb6b; }
+
+.http-filter {
+  height: 22px;
+  font-size: 11px;
+  padding: 0 6px;
+  margin-left: auto;
+  min-width: 180px;
+}
+
+.http-badge {
+  margin-left: 6px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--bg-inset);
+  color: var(--text-faint);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+
+/* ── Stream log ──
+ * A conversation rather than a single body, so each message keeps its own
+ * direction marker and timestamp — which of the two sides said something is
+ * the first thing you look for when a socket misbehaves.
+ */
+.http-stream-log {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 11.5px;
+}
+
+.http-stream-line {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 4px 6px;
+  border-radius: 4px;
+  background: var(--bg-inset);
+}
+
+.http-stream-line.d-out {
+  background: var(--accent-soft);
+}
+
+.http-stream-line.d-system {
+  background: none;
+  color: var(--text-faint);
+  font-size: 10.5px;
+}
+
+.http-stream-mark {
+  flex-shrink: 0;
+  color: var(--text-faint);
+  width: 12px;
+  text-align: center;
+}
+
+.http-stream-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.http-stream-body pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.http-stream-event {
+  display: inline-block;
+  margin-bottom: 2px;
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.http-stream-time {
+  flex-shrink: 0;
+  color: var(--text-faint);
+  font-size: 9.5px;
+  padding-top: 1px;
+}
+
+.http-stream-compose {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.http-stream-compose textarea {
+  flex: 1;
+  resize: vertical;
+  font-size: 11.5px;
+  padding: 6px 8px;
+}
+
+/* ── Schema, methods, history and cookies ── */
+.http-schema {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px 12px;
+  font-size: 11.5px;
+  line-height: 1.6;
+}
+
+.http-schema-type {
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.http-schema-name {
+  font-size: 12px;
+  color: var(--text);
+  margin-bottom: 3px;
+}
+
+.http-schema-field {
+  padding-left: 14px;
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  margin: 0;
+}
+
+.http-schema-fieldtype {
+  color: var(--accent);
+}
+
+.http-history-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 4px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  background: none;
+}
+
+.http-history-row:hover {
+  background: var(--hover);
+}
+
 /* ── Coverage ──────────────────────────────────────────────────────────────
  * The gutter stripe is a margin decoration rather than a whole-line tint:
  * coverage is background information you read code *through*, so it must not
@@ -3777,4 +3936,522 @@
   border: 1px solid var(--accent);
   background: var(--bg-inset);
   color: var(--text);
+}
+
+/* ── Run results ──
+ * A run is a list of requests with their assertions underneath, rather than a
+ * flat list of tests: which request a failure belongs to is the first thing
+ * you need, and a flat list makes you reconstruct it.
+ */
+.http-run-step {
+  margin-bottom: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.http-run-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 3px 2px;
+  text-align: left;
+  background: none;
+}
+
+.http-run-head:hover {
+  background: var(--hover);
+}
+
+.http-run-test {
+  display: flex;
+  gap: 7px;
+  align-items: baseline;
+  padding: 2px 0 2px 22px;
+  font-size: 11px;
+}
+
+.http-run-test.ok {
+  color: var(--text-dim);
+}
+
+.http-run-test.bad {
+  color: var(--danger);
+}
+
+.http-run-why {
+  color: var(--text-faint);
+  font-size: 10.5px;
+}
+
+.http-run-error {
+  margin: 3px 0 3px 22px;
+  padding: 4px 7px;
+  border-radius: 3px;
+  background: var(--removed-bg);
+  color: var(--danger);
+  font-size: 10.5px;
+}
+
+.http-run-log {
+  padding-left: 22px;
+  color: var(--text-faint);
+  font-size: 10px;
+}
+
+.link-btn.active {
+  color: var(--accent);
+}
+
+/* ── Recorder strip ──
+ * Sits under the browser toolbar and only exists while there is something to
+ * say: what is being recorded, and what the picker last resolved.
+ */
+.browser-record-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-inset);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.browser-record-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--danger);
+  animation: nova-record-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes nova-record-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+.browser-locator {
+  color: var(--accent);
+  font-size: 10.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 46%;
+}
+
+/* ── Security panel ──
+ * Severity is a colour, confidence is words. A coloured dot alone would read
+ * as certainty, and most of these findings are patterns rather than proof.
+ */
+.security-view {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.security-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.security-check select {
+  height: 20px;
+  font-size: 10.5px;
+  margin-left: 3px;
+}
+
+.security-progress,
+.security-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.security-progress-file {
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 50%;
+}
+
+.security-pill {
+  padding: 1px 7px;
+  border-radius: 9px;
+  font-size: 10px;
+  font-weight: 600;
+  background: var(--bg-inset);
+}
+
+.security-pill.sev-critical { color: #ff5370; }
+.security-pill.sev-high { color: #f78c6c; }
+.security-pill.sev-medium { color: #ffcb6b; }
+.security-pill.sev-low { color: #82aaff; }
+.security-pill.sev-info { color: var(--text-faint); }
+
+.security-clean {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--success, #4ec9b0);
+  font-size: 11.5px;
+}
+
+.security-list {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.security-finding {
+  border-bottom: 1px solid var(--border);
+}
+
+.security-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 12px;
+  text-align: left;
+  background: none;
+}
+
+.security-head:hover {
+  background: var(--hover);
+}
+
+.security-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.security-dot.sev-critical { background: #ff5370; }
+.security-dot.sev-high { background: #f78c6c; }
+.security-dot.sev-medium { background: #ffcb6b; }
+.security-dot.sev-low { background: #82aaff; }
+.security-dot.sev-info { background: var(--text-faint); }
+
+.security-title {
+  font-size: 11.5px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.security-confidence {
+  font-size: 9.5px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--bg-inset);
+  flex-shrink: 0;
+}
+
+.security-confidence.c-confirmed { color: #ff5370; }
+.security-confidence.c-likely { color: var(--warning); }
+.security-confidence.c-possible { color: var(--text-faint); }
+
+.security-where {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--text-faint);
+  flex-shrink: 0;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.security-body {
+  padding: 4px 12px 12px 27px;
+  font-size: 11.5px;
+  line-height: 1.65;
+  color: var(--text-dim);
+}
+
+.security-body p {
+  margin: 0 0 7px;
+}
+
+.security-excerpt {
+  margin: 0 0 8px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: var(--bg-inset);
+  font-size: 10.5px;
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.security-fix strong {
+  color: var(--success, #4ec9b0);
+  margin-right: 5px;
+}
+
+.security-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  font-size: 10.5px;
+}
+
+/* ── Share ──
+ * A public URL is a consequence, not a setting. The dialog keeps what is
+ * exposed, what was withheld, who is watching and how to stop all visible.
+ */
+.share-modal {
+  width: 560px;
+  max-width: 92vw;
+  padding: 0;
+}
+
+.share-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+
+.share-modes {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+}
+
+.share-modes label {
+  display: flex;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.share-modes label.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.share-modes label.disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.share-modes label div {
+  display: grid;
+  gap: 2px;
+}
+
+.share-modes strong {
+  font-size: 12.5px;
+}
+
+.share-modes span {
+  font-size: 11px;
+  color: var(--text-faint);
+  line-height: 1.55;
+}
+
+.share-note,
+.share-warn {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin: 0 14px 12px;
+  padding: 8px 10px;
+  border-radius: 5px;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.share-note {
+  background: var(--bg-inset);
+  color: var(--text-faint);
+}
+
+.share-warn {
+  background: var(--removed-bg);
+  color: var(--danger);
+}
+
+.share-starting {
+  display: grid;
+  gap: 6px;
+  justify-items: center;
+  padding: 30px 16px;
+  font-size: 12px;
+}
+
+.share-live {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 13px 14px 6px;
+  font-size: 12.5px;
+}
+
+.share-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--success, #4ec9b0);
+  animation: nova-record-pulse 1.6s ease-in-out infinite;
+}
+
+.share-url {
+  display: flex;
+  gap: 7px;
+  padding: 4px 14px 12px;
+}
+
+.share-url input {
+  flex: 1;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+  padding: 6px 8px;
+}
+
+.share-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 10px 14px 14px;
+  border-top: 1px solid var(--border);
+}
+
+/* ---- live audio and video ---- */
+
+.share-cast {
+  margin: 4px 14px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-elevated, #ffffff05);
+}
+
+.share-cast-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 11px 7px;
+  font-size: 12px;
+}
+
+.share-cast-picks {
+  display: flex;
+  gap: 7px;
+  padding: 0 11px 9px;
+  flex-wrap: wrap;
+}
+
+.share-cast-picks label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 11.5px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.share-cast-picks label:hover {
+  border-color: var(--accent);
+}
+
+.share-cast-picks label.active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+}
+
+.share-cast-picks input {
+  margin: 0;
+}
+
+.share-sources {
+  padding: 0 11px 9px;
+}
+
+.share-sources-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.share-source-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
+  gap: 7px;
+  max-height: 190px;
+  overflow: auto;
+}
+
+.share-source {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: none;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 10.5px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.share-source:hover {
+  border-color: var(--accent);
+}
+
+.share-source.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.share-source img,
+.share-source-blank {
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  object-fit: cover;
+  border-radius: 3px;
+  background: #0006;
+}
+
+.share-source span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.share-preview {
+  display: block;
+  width: calc(100% - 22px);
+  margin: 0 11px 9px;
+  border-radius: 5px;
+  background: #000;
+  max-height: 190px;
+}
+
+.share-cast-actions {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 11px 10px;
 }

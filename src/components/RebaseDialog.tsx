@@ -153,10 +153,20 @@ export default function RebaseDialog() {
                   {step.subject}
                 </span>
               )}
-              <button className="icon-btn" style={{ width: 20, height: 20 }} onClick={() => swap(index, index - 1)}>
+              <button
+                className="icon-btn"
+                style={{ width: 20, height: 20 }}
+                title="Move this commit earlier"
+                onClick={() => swap(index, index - 1)}
+              >
                 <ArrowUp size={12} />
               </button>
-              <button className="icon-btn" style={{ width: 20, height: 20 }} onClick={() => swap(index, index + 1)}>
+              <button
+                className="icon-btn"
+                style={{ width: 20, height: 20 }}
+                title="Move this commit later"
+                onClick={() => swap(index, index + 1)}
+              >
                 <ArrowDown size={12} />
               </button>
             </div>

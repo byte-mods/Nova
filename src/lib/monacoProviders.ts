@@ -19,6 +19,7 @@ import {
 } from './lspConvert'
 import { applyWorkspaceEdit, type WorkspaceEdit } from './workspaceEdit'
 import { requestApproval } from './editPreview'
+import { refreshSemanticTokens, registerSemanticTokens } from './semanticTokens'
 
 /** Languages that get code-intelligence providers registered. */
 const PROVIDER_LANGUAGES = [
@@ -95,9 +96,14 @@ export function registerCodeIntelligence() {
     registerCodeVision(language)
     registerPostfixCompletion(language)
     registerIndexSignatureHelp(language)
+    registerSemanticTokens(language)
   }
 
   wireDiagnostics()
+
+  // A server that finishes starting after a file was opened has better tokens
+  // than the fallback that file was painted with; this asks Monaco to re-ask.
+  window.nova.lsp.onStatus(() => refreshSemanticTokens())
 
   // Cmd+click and "Go to Definition" land on files that may not be open yet;
   // this is the standalone editor's hook for opening them ourselves.

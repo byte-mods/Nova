@@ -233,7 +233,12 @@ export default function DebugView() {
                   placeholder="expression"
                   style={{ flex: 1, height: 22, fontSize: 11.5 }}
                 />
-                <button className="icon-btn" style={{ width: 22, height: 22 }} type="submit">
+                <button
+                  className="icon-btn"
+                  style={{ width: 22, height: 22 }}
+                  title="Watch this expression"
+                  type="submit"
+                >
                   <Plus size={12} />
                 </button>
               </form>
@@ -251,6 +256,7 @@ export default function DebugView() {
                   <button
                     className="icon-btn"
                     style={{ width: 20, height: 20 }}
+                    title="Stop watching this expression"
                     onClick={() => useStore.getState().removeWatch(watch.expression)}
                   >
                     <X size={11} />
@@ -389,6 +395,7 @@ function BreakpointsTab() {
               <button
                 className="icon-btn"
                 style={{ width: 20, height: 20 }}
+                title="Remove this watchpoint"
                 onClick={() => void window.nova.debug.removeDataBreakpoint(watchpoint.dataId)}
               >
                 <X size={11} />

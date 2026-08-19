@@ -51,7 +51,12 @@ export default function RunPicker() {
         <Play size={12} style={{ color: 'var(--success)' }} />
         <span className="run-label">{active.label}</span>
       </button>
-      <button className="icon-btn" style={{ width: 20 }} onClick={() => setOpen((v) => !v)}>
+      <button
+        className="icon-btn"
+        style={{ width: 20 }}
+        title="Pick another run configuration"
+        onClick={() => setOpen((v) => !v)}
+      >
         <ChevronDown size={13} />
       </button>
 
