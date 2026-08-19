@@ -4,6 +4,7 @@
 
 **A desktop IDE that brings IntelliJ-grade code intelligence, an API client, a browser, a security scanner and an AI pair to one window — then shares the whole session, screen and voice included, over a link.**
 
+[![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Electron](https://img.shields.io/badge/Electron-43-47848F?logo=electron&logoColor=white)](https://www.electronjs.org/)
 [![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)](https://react.dev/)
@@ -43,6 +44,110 @@ live Mermaid system-design diagrams, and a build-it-yourself tutorial.
 into a link. Whoever holds it watches the project read-only in a browser — and,
 if you want, your screen, camera and voice along with it. No account, no
 install, nothing to join.
+
+---
+
+## A look at it
+
+<table>
+<tr>
+<td width="50%" valign="top">
+
+**The editor, with no language server**
+
+<img src="docs/shot-editor.png" alt="The Monaco editor with the project tree, symbol index and tab actions">
+
+Go-to-definition, find usages, go-to-symbol, autocomplete and twenty-three
+refactorings all run off Nova's own index of the project — built on open, in
+about half a second for a 1,200-file tree. Install a language server and it
+becomes type-aware; don't, and none of it stops working.
+
+</td>
+<td width="50%" valign="top">
+
+**An API client that lives in the repo**
+
+<img src="docs/shot-api-client.png" alt="The request panel: three requests parsed from a .http file with methods, URLs and variables">
+
+A `.http` file *is* the collection, so it diffs and merges like code. HTTP,
+GraphQL, gRPC and WebSocket in one format, with assertions, chained values,
+environments, OpenAPI import and a mock server.
+
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+
+**An agent that plans before it writes**
+
+<img src="docs/shot-agent-plan.png" alt="A proposed plan with four steps awaiting approval">
+
+A request that will change files is planned first, read-only. Strike out any
+step you do not want; nothing is written until you press Approve. Steps then
+tick over in place while it works.
+
+</td>
+<td width="50%" valign="top">
+
+**…and keeps the record**
+
+<img src="docs/shot-agent-history.png" alt="Plan history showing a completed plan with 9/9 tests passing and a revision in progress">
+
+Every plan is kept. A second attempt is filed as a **revision** and shown as a
+diff of the checklist. When a plan finishes, Nova runs the project's own tests
+and stamps the verdict on it — `9/9 pass`, or what broke.
+
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+
+**Share the session — screen, camera, voice**
+
+<img src="docs/shot-share.png" alt="The share dialog with a public URL and camera and microphone selected">
+
+One button opens a Cloudflare tunnel. Whoever holds the link reads the project
+in a browser — and, if you tick them, sees your screen and hears you. Nothing to
+install on their side, and no write path exists on the server at all.
+
+</td>
+<td width="50%" valign="top">
+
+**Six assistants, one console**
+
+<img src="docs/shot-providers.png" alt="Settings showing Kimi, GLM and DeepSeek key fields alongside the detected Claude, Codex and OpenCode binaries">
+
+Claude, Codex and OpenCode run as CLIs. Kimi, GLM and DeepSeek are reached
+through Anthropic-compatible endpoints, so they inherit the streaming and
+file-change handling that is already tested. Keys live in the OS keychain.
+
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+
+**Security scanning built in**
+
+<img src="docs/shot-security.png" alt="The security panel listing a shell injection, dynamic code execution and an HTML sink, each with a confidence label">
+
+Secrets, a SAST pass with CWE-tagged findings, and a dependency audit across
+nine lockfile ecosystems. Worst first, and every finding states its
+**confidence** out loud rather than implying it.
+
+</td>
+<td width="50%" valign="top">
+
+**Plugins, sandboxed**
+
+<img src="docs/shot-plugins.png" alt="The plugins sidebar, installing from a git URL with a permission list">
+
+A plugin is a git repository with a manifest. Its code runs in a separate host
+process, and a permission it was not granted fails at the call site with the
+permission named. Plugins can also hand the AI console new MCP tools.
+
+</td>
+</tr>
+</table>
 
 ---
 
@@ -799,6 +904,16 @@ npm run dist:mac
 ```
 
 Also `npm run dist` for the current platform. Output lands in `release/`.
+
+---
+
+## Versioning
+
+Nova follows [semantic versioning](https://semver.org), currently **1.0.0**.
+Every push to `main` bumps the patch version, so the next one is `1.0.1`; the
+release steps and what counts as a breaking change are in
+**[docs/RELEASING.md](docs/RELEASING.md)**, and what shipped in each version is
+in **[CHANGELOG.md](CHANGELOG.md)**.
 
 ---
 
