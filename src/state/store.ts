@@ -159,6 +159,9 @@ const noSessions = (): Record<AiProvider, string | undefined> => ({
   claude: undefined,
   codex: undefined,
   opencode: undefined,
+  kimi: undefined,
+  glm: undefined,
+  deepseek: undefined,
 })
 
 export interface Bookmark {
@@ -276,6 +279,8 @@ export interface Settings {
   aiProvider: AiProvider
   aiModel: string
   aiPermissionMode: 'default' | 'acceptEdits' | 'plan' | 'bypassPermissions'
+  /** Per-provider endpoint overrides for the Anthropic-compatible vendors. */
+  aiBaseUrls?: Partial<Record<AiProvider, string>>
   browserHome: string
   iconPack: 'nova' | 'classic' | 'minimal'
   /** Master switch for the built-in inspections. */
@@ -325,6 +330,7 @@ export const defaultSettings: Settings = {
   aiProvider: 'claude',
   aiModel: '',
   aiPermissionMode: 'acceptEdits',
+  aiBaseUrls: {},
   browserHome: 'http://localhost:3000',
   iconPack: 'nova',
   inspectionsEnabled: true,
@@ -437,6 +443,8 @@ interface State {
   activeChatId: string | null
   /** The plan awaiting approval or being executed in the active chat. */
   plan: Plan | null
+  /** Every plan this conversation produced, oldest first. */
+  plans: Plan[]
   messages: AiMessage[]
   aiRunning: boolean
   aiSessionId: Record<AiProvider, string | undefined>
@@ -566,6 +574,8 @@ interface State {
   deleteChat: (id: string) => Promise<void>
   persistChat: () => Promise<void>
   setPlan: (plan: Plan | null) => void
+  discardPlan: () => void
+  patchPlan: (id: string, patch: (plan: Plan) => Plan) => void
 
   setPalette: (open: boolean, mode?: PaletteMode) => void
   searchInFolder: (dir: string) => void
@@ -660,6 +670,7 @@ export const useStore = create<State>((set, get) => ({
   chats: [],
   activeChatId: null,
   plan: null,
+  plans: [],
   messages: [],
   aiRunning: false,
   aiSessionId: noSessions(),
@@ -717,6 +728,7 @@ export const useStore = create<State>((set, get) => ({
       chats: [],
       activeChatId: null,
       plan: null,
+      plans: [],
       usages: null,
       indexStatus: null,
       aiSessionId: noSessions(),
@@ -1868,7 +1880,7 @@ export const useStore = create<State>((set, get) => ({
   async loadChats() {
     const root = get().root
     if (!root) {
-      set({ chats: [], activeChatId: null, messages: [], plan: null })
+      set({ chats: [], activeChatId: null, messages: [], plan: null, plans: [] })
       return
     }
     const chats = await nova().chats.list(root)
@@ -1898,6 +1910,7 @@ export const useStore = create<State>((set, get) => ({
       activeChatId: id,
       messages: [],
       plan: null,
+      plans: [],
       aiSessionId: noSessions(),
     })
   },
@@ -1909,10 +1922,15 @@ export const useStore = create<State>((set, get) => ({
 
     const stored = await nova().chats.get(root, id)
     if (!stored) return
+    // A chat saved before plan history existed has only the active plan, so
+    // treat that as a one-entry history rather than opening with nothing.
+    const plans = stored.plans?.length ? stored.plans : stored.plan ? [stored.plan] : []
+
     set({
       activeChatId: id,
       messages: (stored.messages as AiMessage[]) ?? [],
       plan: stored.plan ?? null,
+      plans,
       aiSessionId: {
         ...noSessions(),
         ...(stored.sessionIds as Partial<Record<AiProvider, string | undefined>>),
@@ -1930,7 +1948,7 @@ export const useStore = create<State>((set, get) => ({
         set({ activeChatId: null })
         await get().switchChat(chats[0].id)
       } else {
-        set({ activeChatId: null, messages: [], plan: null })
+        set({ activeChatId: null, messages: [], plan: null, plans: [] })
         await get().newChat()
       }
     }
@@ -1962,14 +1980,57 @@ export const useStore = create<State>((set, get) => ({
       messages,
       sessionIds: { claude: aiSessionId.claude, codex: aiSessionId.codex },
       plan: plan ?? undefined,
+      plans: get().plans,
       createdAt: existing?.createdAt ?? Date.now(),
       updatedAt: Date.now(),
     }
     set({ chats: await nova().chats.save(root, stored) })
   },
 
+  /**
+   * Sets the active plan and folds it into this chat's history.
+   *
+   * Updating in place by id rather than appending: the same plan is written
+   * back on every step tick, and a history that grew a row per tick would be
+   * useless. Clearing the active plan deliberately leaves the record alone —
+   * discarding a plan is a thing that happened, and the point of the history is
+   * to still be able to see what was proposed.
+   */
   setPlan(plan) {
-    set({ plan })
+    if (!plan) {
+      set({ plan: null })
+      void get().persistChat()
+      return
+    }
+    const plans = [...get().plans]
+    const at = plans.findIndex((p) => p.id === plan.id)
+    if (at === -1) plans.push(plan)
+    else plans[at] = plan
+
+    set({ plan, plans })
+    void get().persistChat()
+  },
+
+  /**
+   * Updates one plan wherever it lives.
+   *
+   * Distinct from `setPlan` because a late-arriving result — a test run that
+   * finished after the user moved on — must not drag that plan back to being
+   * the active one. The active plan only changes if it is the one being
+   * patched.
+   */
+  patchPlan(id, patch) {
+    const plans = get().plans.map((p) => (p.id === id ? patch(p) : p))
+    const current = get().plan
+    set({ plans, plan: current?.id === id ? patch(current) : current })
+    void get().persistChat()
+  },
+
+  /** Records a plan as rejected, then clears it, so the history keeps it. */
+  discardPlan() {
+    const plan = get().plan
+    if (plan) get().setPlan({ ...plan, status: 'rejected' })
+    set({ plan: null })
     void get().persistChat()
   },
 

@@ -17,6 +17,7 @@ import RebaseDialog from '@/components/RebaseDialog'
 import Splitter from '@/components/Splitter'
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts'
 import { useWatchers } from '@/hooks/useWatchers'
+import { useSharedAgent } from '@/hooks/useSharedAgent'
 import { useExplainEvents } from '@/hooks/useExplainEvents'
 import { usePluginEvents, usePluginWorkspaceRoot } from '@/hooks/usePluginEvents'
 import { useInspections } from '@/hooks/useInspections'
@@ -37,6 +38,7 @@ export default function App() {
 
   useKeyboardShortcuts()
   useWatchers()
+  useSharedAgent()
   useExplainEvents()
   usePluginEvents()
   useInspections()

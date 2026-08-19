@@ -105,6 +105,40 @@ export interface ShareStatus {
   broadcast: ShareBroadcastStatus
 }
 
+/**
+ * The agent's work, as viewers see it.
+ *
+ * Published separately from the file tree because it answers a different
+ * question: not "what does this project contain" but "what is happening right
+ * now". Someone watching a share while an agent works wants the plan, which
+ * step it is on, and what it has touched — and reconstructing that from a file
+ * tree that keeps changing under them is not possible.
+ *
+ * Only the shape, never the content: step text and per-file line counts, with
+ * no diffs and no source. A viewer can already read the files through the share
+ * if they are entitled to; this does not become a second, wider route to them.
+ */
+export interface ShareAgentState {
+  active: boolean
+  /** What the user asked for. */
+  request: string
+  /** `proposed` while it waits for approval, then the execution states. */
+  status: string
+  steps: { text: string; status: string }[]
+  /** Files touched so far, by project-relative path. */
+  edits: { path: string; additions: number; deletions: number }[]
+  /** What the project's tests said, once they have run. */
+  verification?: {
+    state: string
+    framework: string
+    passed: number
+    failed: number
+    total: number
+  }
+  /** Whether a run is streaming right now, for the live dot. */
+  running: boolean
+}
+
 /** What the renderer pushes so viewers see the editor move. */
 export interface SharePresence {
   /** Path relative to the project root. */

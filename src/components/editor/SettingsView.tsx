@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Check, RefreshCw, RotateCcw } from 'lucide-react'
 import type { AiProvider } from '@shared/types'
+import { compatibleProviders } from '@shared/aiProviders'
 import { useStore } from '@/state/store'
 import { themes } from '@/theme/themes'
 import { inspectionCatalogue } from '@/lib/inspections'
@@ -432,6 +433,8 @@ export default function SettingsView() {
           </Field>
         </div>
 
+        <VendorKeys />
+
         <div className="provider-list">
           {providers.map((p) => (
             <div key={p.id} className="provider-row">
@@ -632,5 +635,134 @@ function Toggle({
       </span>
       {label}
     </button>
+  )
+}
+
+/**
+ * Keys and endpoints for the vendor providers.
+ *
+ * A key that has been saved is never read back — the main process stores it in
+ * the OS keychain and will only say whether one exists. So the field shows a
+ * placeholder standing for "something is stored" rather than the value, and
+ * pasting over it replaces it. Displaying the key would put it on screen during
+ * exactly the screen-share this IDE now makes easy.
+ */
+function VendorKeys() {
+  const settings = useStore((s) => s.settings)
+  const setSettings = useStore((s) => s.setSettings)
+  const [stored, setStored] = useState<AiProvider[]>([])
+  const [drafts, setDrafts] = useState<Record<string, string>>({})
+  const [saved, setSaved] = useState<string | null>(null)
+  const [failed, setFailed] = useState<string | null>(null)
+
+  const refresh = () => void window.nova.ai.storedKeys().then(setStored)
+  useEffect(refresh, [])
+
+  const save = async (provider: AiProvider) => {
+    const value = drafts[provider] ?? ''
+    const ok = await window.nova.ai.setKey(provider, value.trim() || null)
+    setFailed(ok ? null : provider)
+    if (ok) {
+      setSaved(provider)
+      setTimeout(() => setSaved(null), 2000)
+      setDrafts((d) => ({ ...d, [provider]: '' }))
+      refresh()
+      void window.nova.ai.providers().then((list) => useStore.getState().setProviders(list))
+    }
+  }
+
+  return (
+    <div className="vendor-keys">
+      <p className="faint" style={{ fontSize: 11, lineHeight: 1.6, margin: '0 0 8px' }}>
+        Kimi, GLM and DeepSeek publish Anthropic-compatible endpoints, so Nova drives them with the
+        Claude Code CLI pointed at a different address. Each needs its own key. Keys are kept in the
+        OS keychain and are never shown again once saved.
+      </p>
+
+      {compatibleProviders().map((spec) => {
+        const has = stored.includes(spec.id)
+        const urlKey = `aiBaseUrl_${spec.id}`
+        const url = (settings.aiBaseUrls ?? {})[spec.id] ?? ''
+        return (
+          <div key={spec.id} className="vendor-key-row">
+            <div className="vendor-key-head">
+              <b>{spec.label}</b>
+              {has ? (
+                <span className="chip" title="A key is stored for this provider">
+                  key saved
+                </span>
+              ) : (
+                <span className="chip danger" title="No key stored — this provider cannot run">
+                  no key
+                </span>
+              )}
+              <button
+                className="link-btn"
+                title={`Open ${spec.label}'s console to create an API key`}
+                onClick={() => void window.nova.app.openExternal(spec.compatible!.console)}
+              >
+                Get a key
+              </button>
+            </div>
+
+            <div className="vendor-key-fields">
+              <input
+                type="password"
+                autoComplete="off"
+                spellCheck={false}
+                placeholder={has ? '•••••••• stored — paste to replace' : 'Paste the API key'}
+                value={drafts[spec.id] ?? ''}
+                onChange={(e) => setDrafts((d) => ({ ...d, [spec.id]: e.target.value }))}
+              />
+              <button
+                className="btn sm"
+                title={`Save this key for ${spec.label} in the OS keychain`}
+                onClick={() => void save(spec.id)}
+              >
+                {saved === spec.id ? <Check size={11} /> : null}
+                {saved === spec.id ? 'Saved' : 'Save'}
+              </button>
+              {has && (
+                <button
+                  className="btn sm danger"
+                  title={`Forget the stored ${spec.label} key`}
+                  onClick={async () => {
+                    await window.nova.ai.setKey(spec.id, null)
+                    refresh()
+                    void window.nova.ai.providers().then((list) => useStore.getState().setProviders(list))
+                  }}
+                >
+                  Forget
+                </button>
+              )}
+            </div>
+
+            <input
+              key={urlKey}
+              className="vendor-key-url mono"
+              spellCheck={false}
+              placeholder={spec.compatible!.defaultBaseUrl}
+              title="Where requests go. Left blank, the vendor's documented address is used."
+              value={url}
+              onChange={(e) =>
+                setSettings({
+                  aiBaseUrls: { ...(settings.aiBaseUrls ?? {}), [spec.id]: e.target.value },
+                })
+              }
+            />
+            <small className="faint">
+              Suggested model: <code className="mono">{spec.compatible!.defaultModel}</code> — put it
+              in “Model override” when this provider is selected.
+            </small>
+
+            {failed === spec.id && (
+              <small className="danger">
+                This machine has no secure storage available, so the key was not saved.
+              </small>
+            )}
+          </div>
+        )
+      })}
+    </div>
   )
 }

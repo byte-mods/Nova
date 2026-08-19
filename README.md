@@ -8,7 +8,7 @@
 [![Electron](https://img.shields.io/badge/Electron-43-47848F?logo=electron&logoColor=white)](https://www.electronjs.org/)
 [![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)](https://react.dev/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.5-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-[![Tests](https://img.shields.io/badge/tests-405%20live%20%2B%20748%20offline-brightgreen.svg)](tests/FEATURES.md)
+[![Tests](https://img.shields.io/badge/tests-452%20live%20%2B%20748%20offline-brightgreen.svg)](tests/FEATURES.md)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%C2%B7%20Linux%20%C2%B7%20Windows-lightgrey.svg)](docs/INSTALLATION.md)
 
 <img src="docs/screenshot.png" alt="Nova IDE — editor, project tree, symbol index and the Explain button" width="100%">
@@ -23,7 +23,8 @@ Nova is a full IDE in an Electron window: the Monaco editor, a project-wide symb
 index, twenty-three refactorings, a debugger, a test runner, Git with a
 three-way merge editor, a real Chromium pane, a UML/architecture diagram
 designer, an API client, an end-to-end test recorder, a security scanner, a
-plugin host, and an AI console wired to the `claude` and `codex` CLIs.
+plugin host, and an AI console wired to the `claude`, `codex` and `opencode`
+CLIs — and, through the first of those, to Kimi, GLM and DeepSeek.
 
 Three things make it unusual:
 
@@ -259,8 +260,8 @@ Ctrl+C interrupts the foreground job rather than the shell.
 - **Diagrams** — `.nova-diagram.json` files open in a canvas editor with ten
   shapes, 50 icons, UML relationships and SVG/PNG export, or in a live Mermaid
   source editor. Six starter templates.
-- **AI console** — Claude, Codex, or a **local model** via OpenCode + Ollama
-  running in your project, streaming tool calls,
+- **AI console** — Claude, Codex, **Kimi**, **GLM**, **DeepSeek**, or a **local
+  model** via OpenCode + Ollama running in your project, streaming tool calls,
   with every touched file becoming a reviewable change card with a diff and a
   revert button.
 - **Local history** — every overwrite snapshotted independently of Git, including
@@ -311,11 +312,52 @@ Either one can carry **live audio and video**. Tick any combination of
 holding the link watches in their browser — no account, no install, no plugin. A
 screen and a camera together arrive as a main view with the presenter inset.
 
+While an agent is working, viewers also see **what it is doing** — the plan, the
+step it is on, the files it has touched with their line counts, and what the
+tests said. Paths are project-relative and no file contents ride along: it is
+the shape of the work, not a second route to the source.
+
 It is read-only in the strongest sense: the share server has no endpoint that
 writes anything. `.env` files, keys and certificates are refused and listed back
 to you, every path is resolved and confirmed to be inside the project, and the
 32-character token in the URL is the whole credential — without it every route,
 including the index, is a 404.
+
+### An agent that plans, and a record of what it planned
+
+A request that will change files is **planned first**. The plan arrives as a
+checklist you can strike steps out of, and nothing is written until you press
+Approve — the planning turn runs read-only, so that is a guarantee rather than a
+promise.
+
+While it works, steps tick over in place and every file it touches appears with
+its own **+/- counts**, one click from a diff and a revert button.
+
+What is new is that none of this is thrown away:
+
+- **Plan history** keeps every plan the conversation produced. A second attempt
+  is filed as a **revision** of the first and shown as a diff of the checklist —
+  what was added, what was dropped — rather than as another wall of text.
+- **Verified runs.** When a plan finishes, Nova runs the project's own test
+  suite and attaches the result to it: `7/7 pass`, or which tests failed. An
+  agent saying it is done is the weakest claim in the loop; this is the one part
+  it cannot check by reading. A project with no framework is reported as *no
+  tests*, never as a pass.
+- All of it survives a restart, per project.
+
+### Six assistants, one console
+
+`claude`, `codex` and `opencode` are CLIs Nova drives directly. **Kimi**
+(Moonshot), **GLM** (Z.ai) and **DeepSeek** publish Anthropic-compatible
+endpoints, so Nova runs them through the Claude Code CLI pointed at a different
+address — which means they inherit the streaming, tool-call and file-change
+handling that is already tested, rather than three adapters nobody can verify.
+
+Add a key in **Settings › AI**. Keys go to the OS keychain, are never shown
+again, and are never handed back to the renderer. Each vendor gets its own CLI
+config directory, so a vendor run cannot pick up your personal Anthropic
+session — without that, `ANTHROPIC_AUTH_TOKEN` is quietly ignored in favour of
+the logged-in one, and your Anthropic token goes to a third party.
 
 ### Plugins
 
@@ -497,10 +539,27 @@ rather than implying it.
 <details>
 <summary><b>8 · Ask the AI console, and have it explain the codebase</b></summary>
 
-`⌘I` opens the console. Pick **Claude**, **Codex** or a **local model** (OpenCode
-+ Ollama) from the chevron. It runs in your project with full access, streams its
-tool calls, and turns every file it touches into a change card with a diff and a
-**revert** button — nothing lands unreviewed.
+`⌘I` opens the console. Pick your assistant from the chevron: **Claude**,
+**Codex**, **Kimi**, **GLM**, **DeepSeek**, or a **local model** (OpenCode +
+Ollama). It runs in your project with full access, streams its tool calls, and
+turns every file it touches into a change card with a diff and a **revert**
+button — nothing lands unreviewed.
+
+Ask for a change — *"add a greeting module and wire it in"* — and it plans first:
+
+1. A checklist arrives with nothing written yet. Untick any step you do not
+   want, then press **Approve and run**.
+2. Steps tick over as it works, and each file it edits appears with its `+`/`−`
+   counts. Click one for the diff; **Revert** puts it back.
+3. When it finishes, Nova runs your test suite and stamps the result on the
+   plan — `7/7 pass`, or the names of what broke.
+4. The **plan history** button (next to *New chat*) lists every plan this
+   conversation produced. Ask again and the new plan is filed as a revision,
+   showing which steps changed rather than making you compare two lists.
+
+To use Kimi, GLM or DeepSeek, add a key in **Settings › AI** — each row links to
+the vendor's console, and the suggested model id is shown beside it. Keys are
+kept in the OS keychain and never displayed again.
 
 Above any open file, **Explain** (`⌥⌘E`) generates a full walkthrough of that
 file: the concept behind it, a step-by-step trace, live Mermaid diagrams, the
@@ -526,7 +585,10 @@ Press **Share** in the title bar.
    **Microphone** in *Live audio & video*, choose which screen or window if you
    picked Screen, and press **Go live**. Everyone on the link now sees and hears
    it in their browser — nothing to install on their side.
-4. **Stop the broadcast** ends the audio and video but leaves the shared page up.
+4. If an agent is working while the share is live, viewers also see its plan,
+   which step it is on, the files it has changed and what the tests said — so
+   *"watch me get this done"* needs nothing else set up.
+5. **Stop the broadcast** ends the audio and video but leaves the shared page up.
    **Stop sharing** closes the tunnel, and the URL stops working immediately.
 
 Anything Nova withheld — `.env` files, keys, certificates — is listed in the
@@ -688,13 +750,14 @@ npm test
 | `npm run test:tools` | **37 checks** against real tooling — clangd + rust-analyzer over LSP, debugpy over DAP, inlay hints, call hierarchy. Skipped tools are reported, not silently passed |
 | `npm run test:ui` | **134 UI checks** driving the running app with real clicks and keystrokes over CDP — see [tests/FEATURES.md](tests/FEATURES.md) |
 
-Eleven more live-app suites run separately, each against the running IDE:
+Twelve more live-app suites run separately, each against the running IDE:
 
 | | |
 |---|---|
 | `verify-explorer.mjs` | **20** — multi-select, scoped search and Safe Delete |
 | `verify-tutorial.mjs` | **22** — the project tutorial |
-| `verify-tooltips.mjs` | **28** — every icon control in every sidebar view, every panel, both editors, the chrome and the dialogs explains itself on hover |
+| `verify-tooltips.mjs` | **30** — every icon control in every sidebar view, every panel, both editors, the chrome and the dialogs explains itself on hover, and every dropdown is tall enough to show its own value |
+| `verify-agent.mjs` | **45** — plans, revisions and test results across a reload; and a vendor run checked against a stub endpoint that records which credential actually went on the wire |
 | `verify-plugins.mjs` | **32** — installs a real plugin from a real git repository: the manifest, the fork, the permission gate, storage, contributed views and commands, disable/enable/uninstall, and the URLs it refuses |
 | `verify-broadcast.mjs` | **37** — opens a real tunnel, broadcasts real encoded media, and plays it back in a real Chromium over the public URL |
 | `verify-semantic.mjs` | **14** — reads the colour the browser actually computed for a function, a type and a plain variable across twelve languages, then checks an installed server's own tokens come through |

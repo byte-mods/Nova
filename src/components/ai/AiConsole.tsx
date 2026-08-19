@@ -9,6 +9,7 @@ import {
   FileCode2,
   Loader2,
   Paperclip,
+  ListChecks,
   MessagesSquare,
   Plus,
   Trash2,
@@ -23,6 +24,7 @@ import { useStore, type AiMessage, type AiMessagePart } from '@/state/store'
 import { basename, relative } from '@/lib/paths'
 import Markdown from '@/components/editor/Markdown'
 import PlanCard from './PlanCard'
+import PlanHistory from './PlanHistory'
 import { ChangeLine, CommandGroup } from './Activity'
 import { buildContextBlock } from '@/lib/aiContext'
 import { applyProgress, buildExecutePrompt, buildPlanPrompt, needsPlan, parsePlan } from '@/lib/planning'
@@ -38,6 +40,7 @@ export default function AiConsole() {
   const activeTabId = useStore((s) => s.activeTabId)
 
   const chats = useStore((s) => s.chats)
+  const plans = useStore((s) => s.plans)
   const activeChatId = useStore((s) => s.activeChatId)
   const plan = useStore((s) => s.plan)
 
@@ -46,6 +49,7 @@ export default function AiConsole() {
   const [runId, setRunId] = useState<string | null>(null)
   const [planningEnabled, setPlanningEnabled] = useState(true)
   const [showChats, setShowChats] = useState(false)
+  const [showPlans, setShowPlans] = useState(false)
   /**
    * What the in-flight run is for, so its output can be routed on completion.
    * Refs, not state: the event subscription is created once and would close
@@ -117,6 +121,8 @@ export default function AiConsole() {
       // A planning turn must not be able to write, whatever the user's usual
       // permission setting is. That is the guarantee the approval gate rests on.
       permissionMode: mode === 'plan' ? 'plan' : settings.aiPermissionMode,
+      // Only meaningful for the vendor providers; ignored for the rest.
+      baseUrl: settings.aiBaseUrls?.[settings.aiProvider],
     })
     setRunId(id)
     setAttachments([])
@@ -191,9 +197,23 @@ export default function AiConsole() {
         </select>
 
         <button
+          className={`icon-btn ${showPlans ? 'active' : ''}`}
+          title="Plans this conversation has produced, and what changed between attempts"
+          onClick={() => {
+            setShowPlans((v) => !v)
+            setShowChats(false)
+          }}
+        >
+          <ListChecks size={15} />
+        </button>
+
+        <button
           className={`icon-btn ${showChats ? 'active' : ''}`}
           title="Previous conversations"
-          onClick={() => setShowChats((v) => !v)}
+          onClick={() => {
+            setShowChats((v) => !v)
+            setShowPlans(false)
+          }}
         >
           <MessagesSquare size={15} />
         </button>
@@ -206,6 +226,19 @@ export default function AiConsole() {
           <Plus size={15} />
         </button>
       </div>
+
+      {showPlans && (
+        <div className="chat-list">
+          <PlanHistory
+            plans={plans}
+            activeId={plan?.id}
+            onOpen={(chosen) => {
+              useStore.getState().setPlan(chosen)
+              setShowPlans(false)
+            }}
+          />
+        </div>
+      )}
 
       {showChats && (
         <div className="chat-list">
@@ -280,7 +313,7 @@ export default function AiConsole() {
             plan={plan}
             running={running}
             onApprove={() => void approvePlan()}
-            onReject={() => useStore.getState().setPlan(null)}
+            onReject={() => useStore.getState().discardPlan()}
             onToggleStep={(id) =>
               useStore.getState().setPlan({
                 ...plan,
@@ -571,6 +604,32 @@ function summariseToolInput(name: string, input: unknown): string {
 }
 
 /** Bridges main-process AI stream events into the message list. */
+/**
+ * Runs the project's suite and writes the result onto a plan.
+ *
+ * Looked up by id rather than captured, because the user may have moved on to
+ * another plan by the time the suite finishes, and writing this result onto
+ * whatever is on screen would attribute one plan's tests to another.
+ */
+async function runVerification(planId: string, root: string) {
+  const patch = (verification: Plan['verification']) =>
+    useStore.getState().patchPlan(planId, (plan) => ({ ...plan, verification }))
+
+  patch({
+    state: 'running',
+    framework: '',
+    passed: 0,
+    failed: 0,
+    total: 0,
+    failures: [],
+    durationMs: 0,
+    ranAt: Date.now(),
+  })
+
+  const { verifyPlan } = await import('@/lib/planVerify')
+  patch(await verifyPlan(root))
+}
+
 function useAiEvents(
   modeRef: { current: 'chat' | 'plan' | 'execute' },
   requestRef: { current: string },
@@ -633,15 +692,32 @@ function useAiEvents(
               ),
             }))
           return
-        case 'file-change':
+        case 'file-change': {
           if (id)
             store.patchMessage(id, (m) => ({
               ...m,
               changes: [...m.changes.filter((c) => c.path !== event.change.path), event.change],
             }))
+
+          // Attach it to the plan being executed as well as to the message. The
+          // message is the narrative and scrolls away; the plan is the record
+          // someone reads later to see what carrying it out actually cost.
+          const running = store.plan
+          if (modeRef.current === 'execute' && running) {
+            const { path, additions, deletions, kind } = event.change
+            store.setPlan({
+              ...running,
+              edits: [
+                ...(running.edits ?? []).filter((e) => e.path !== path),
+                { path, additions, deletions, kind },
+              ],
+            })
+          }
+
           void store.refreshGit()
           store.bumpTree()
           return
+        }
         case 'done': {
           if (id)
             store.patchMessage(id, (m) => ({
@@ -660,7 +736,16 @@ function useAiEvents(
             // showing an empty checklist would be worse than showing the prose
             // the agent actually wrote, which is already in the transcript.
             const parsed = parsePlan(text, requestRef.current)
-            if (parsed) store.setPlan(parsed)
+            if (parsed) {
+              // Record what this one replaced, so the history can show a second
+              // attempt as a revision rather than as an unrelated plan.
+              const previous = store.plans[store.plans.length - 1]
+              store.setPlan(
+                previous && previous.id !== parsed.id
+                  ? { ...parsed, supersedes: previous.id }
+                  : parsed,
+              )
+            }
           } else if (modeRef.current === 'execute' && store.plan) {
             const advanced = applyProgress(store.plan, text)
             const settled = {
@@ -669,10 +754,17 @@ function useAiEvents(
                 step.status === 'running' ? { ...step, status: 'done' as const } : step,
               ),
             }
-            store.setPlan({
+            const complete = settled.steps.every((x) => x.status !== 'pending')
+            const executed = {
               ...settled,
-              status: settled.steps.every((x) => x.status !== 'pending') ? 'complete' : settled.status,
-            })
+              status: (complete ? 'complete' : settled.status) as Plan['status'],
+            }
+            store.setPlan(executed)
+
+            // The agent has said it is finished; the suite is what decides
+            // whether that is true. Fire and forget — the card fills in when the
+            // run lands, and the transcript is not held up waiting for it.
+            if (complete && store.root) void runVerification(executed.id, store.root)
           }
 
           modeRef.current = 'chat'

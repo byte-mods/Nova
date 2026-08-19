@@ -8,6 +8,7 @@
 import { app, desktopCapturer, ipcMain, screen } from 'electron'
 import path from 'node:path'
 import type {
+  ShareAgentState,
   ShareBroadcastSelection,
   ShareBroadcastStatus,
   ShareMediaChannel,
@@ -192,6 +193,19 @@ export function registerShareHandlers(ctx: Ctx) {
    */
   ipcMain.on('share:media', (_e, channel: ShareMediaChannel, chunk: ArrayBuffer) => {
     server?.pushMedia(channel, Buffer.from(chunk))
+  })
+
+  /**
+   * What the agent is doing, on its way to the viewers.
+   *
+   * Only in project mode. Someone sent a request collection was given a
+   * collection; the fact that an agent is editing the source behind it is not
+   * part of what they were shown, and quietly widening a share is the one thing
+   * this feature must never do.
+   */
+  ipcMain.handle('share:agent', (_e, state: ShareAgentState) => {
+    if (current.mode !== 'project') return
+    server?.setAgent(state)
   })
 
   /** A new recorder is starting, so the old header must not be handed out. */

@@ -278,6 +278,63 @@ await cdp.evaluate(`
   return true
 `)
 
+/* ------------------------------------------------------------------ */
+console.log('\n-- controls are legible, not just present --')
+/* ------------------------------------------------------------------ */
+
+/*
+ * A control that renders but clips its own text is worse than a missing one:
+ * it looks deliberate. The security filter did exactly that — a 20px-tall
+ * select inheriting 6px of vertical padding cut the value through the middle —
+ * so every select is measured against the text it has to show.
+ */
+await cdp.evaluate(`
+  const s = (await import('/src/state/store.ts')).useStore
+  s.getState().showPanel('security')
+  return true
+`)
+await cdp.sleep(800)
+
+const clipped = await cdp.evaluate(`
+  const out = []
+  for (const el of document.querySelectorAll('select')) {
+    const box = el.getBoundingClientRect()
+    if (!box.height) continue
+    const style = getComputedStyle(el)
+    // What the value actually needs: its own line box plus the padding and
+    // border the element imposes on it.
+    const needed =
+      parseFloat(style.fontSize) * 1.2 +
+      parseFloat(style.paddingTop) + parseFloat(style.paddingBottom) +
+      parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth)
+    if (needed > box.height + 0.5) {
+      out.push((el.className || 'select') + ' needs ' + needed.toFixed(1) + 'px in ' + box.height.toFixed(1) + 'px')
+    }
+  }
+  return out
+`)
+check(
+  'every dropdown is tall enough to show its value',
+  clipped.length === 0,
+  clipped.join('\n        '),
+)
+
+const spaced = await cdp.evaluate(`
+  const bar = document.querySelector('.panel-toolbar')
+  if (!bar) return { missing: true }
+  const kids = [...bar.children].map((c) => c.getBoundingClientRect())
+  let touching = 0
+  for (let i = 1; i < kids.length; i++) {
+    if (kids[i].left - kids[i - 1].right < 2 && kids[i].top < kids[i - 1].bottom) touching++
+  }
+  return { missing: false, touching, count: kids.length }
+`)
+check(
+  'toolbar controls do not run into each other',
+  spaced.missing === false && spaced.touching === 0,
+  JSON.stringify(spaced),
+)
+
 console.log(`\n${pass} passed, ${fail} failed`)
 await cdp.close()
 process.exit(fail ? 1 : 0)

@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type {
+  AiProvider,
   AiStartRequest,
   Changelist,
   CodeReference,
@@ -60,6 +61,7 @@ import type { SemanticTokensResult } from '../shared/semantic'
 import type { VisualComparison } from '../shared/e2e'
 import type { ScanOptions, ScanProgress, ScanResult } from '../shared/security'
 import type {
+  ShareAgentState,
   ShareBroadcastSelection,
   ShareMediaChannel,
   ShareOptions,
@@ -239,6 +241,11 @@ const api = {
     providers: (): Promise<ProviderInfo[]> => ipcRenderer.invoke('ai:providers'),
     /** Models Ollama has pulled locally, for the OpenCode provider. */
     localModels: (): Promise<string[]> => ipcRenderer.invoke('ai:localModels'),
+    /** Which providers have an API key stored. Never the keys themselves. */
+    storedKeys: (): Promise<AiProvider[]> => ipcRenderer.invoke('ai:storedKeys'),
+    /** Stores or clears a vendor key; false when the OS cannot encrypt it. */
+    setKey: (provider: AiProvider, key: string | null): Promise<boolean> =>
+      ipcRenderer.invoke('ai:setKey', provider, key),
     start: (req: AiStartRequest): Promise<{ runId: string }> => ipcRenderer.invoke('ai:start', req),
     ack: (runId: string): Promise<void> => ipcRenderer.invoke('ai:ack', runId),
     cancel: (runId: string): Promise<void> => ipcRenderer.invoke('ai:cancel', runId),
@@ -569,6 +576,8 @@ const api = {
     /** One encoded chunk, on its way to every viewer of that channel. */
     media: (channel: ShareMediaChannel, chunk: ArrayBuffer): void =>
       ipcRenderer.send('share:media', channel, chunk),
+    /** Publishes the agent's plan and edits to viewers (project shares only). */
+    agent: (state: ShareAgentState): Promise<void> => ipcRenderer.invoke('share:agent', state),
     /** Clears the remembered stream header before a new recorder starts. */
     mediaReset: (channel: ShareMediaChannel): Promise<void> =>
       ipcRenderer.invoke('share:mediaReset', channel),

@@ -142,7 +142,7 @@ export interface FileChange {
  * it has configured) rather than to a hosted API, so a project can be worked on
  * with no network and no per-token cost.
  */
-export type AiProvider = 'claude' | 'codex' | 'opencode'
+export type AiProvider = 'claude' | 'codex' | 'opencode' | 'kimi' | 'glm' | 'deepseek'
 
 export type AiEvent =
   | { type: 'session'; sessionId: string; runId: string }
@@ -165,6 +165,12 @@ export interface AiStartRequest {
   /** Extra file paths to pin into the prompt as context. */
   attachments?: string[]
   permissionMode?: 'default' | 'acceptEdits' | 'plan' | 'bypassPermissions'
+  /**
+   * Overrides the endpoint for a vendor provider. Sent per run rather than read
+   * from settings in the main process so a user correcting an address that has
+   * moved takes effect on the next prompt, with no restart.
+   */
+  baseUrl?: string
 }
 
 export interface ProviderInfo {

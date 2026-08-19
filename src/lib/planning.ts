@@ -12,6 +12,39 @@
  */
 import type { Plan, PlanStep } from '@shared/chat'
 
+/** One step's fate between two revisions of a plan. */
+export interface PlanStepDelta {
+  kind: 'added' | 'removed' | 'kept'
+  text: string
+}
+
+/**
+ * How a plan differs from the one it replaced.
+ *
+ * Matched on normalised text rather than on step id, because a re-planned turn
+ * produces entirely new ids for what is often the same list with one step
+ * changed. Comparing ids would report every step as both added and removed,
+ * which is the same as reporting nothing.
+ */
+export function diffPlans(previous: Plan, next: Plan): PlanStepDelta[] {
+  const key = (step: PlanStep) => step.text.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+  const before = new Map(previous.steps.map((s) => [key(s), s.text]))
+  const deltas: PlanStepDelta[] = []
+
+  for (const step of next.steps) {
+    const k = key(step)
+    if (before.has(k)) {
+      deltas.push({ kind: 'kept', text: step.text })
+      before.delete(k)
+    } else {
+      deltas.push({ kind: 'added', text: step.text })
+    }
+  }
+  for (const text of before.values()) deltas.push({ kind: 'removed', text })
+
+  return deltas
+}
+
 /** Prompt used for the read-only planning pass. */
 export function buildPlanPrompt(request: string): string {
   return `${request}

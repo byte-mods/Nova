@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { app, ipcMain } from 'electron'
 import { execFile, spawn, type ChildProcessByStdio } from 'node:child_process'
 import type { Readable } from 'node:stream'
 import fs from 'node:fs/promises'
@@ -14,6 +14,8 @@ import type {
 } from '../../shared/types'
 import { codexMcpArgs, writeClaudeMcpConfig, type ResolvedMcpServer } from '../lib/pluginMcp'
 import { buildOpencodeArgs, ollamaModels, translateOpencodeEvent } from '../lib/opencode'
+import { compatibleProviders, providerSpec } from '../../shared/aiProviders'
+import { readAiKey, storedAiKeys, writeAiKey } from '../lib/aiCredentials'
 
 const exec = promisify(execFile)
 
@@ -42,6 +44,48 @@ function enrichedEnv(): NodeJS.ProcessEnv {
   const current = (process.env.PATH ?? '').split(path.delimiter).filter(Boolean)
   const merged = [...new Set([...current, ...extra])].join(path.delimiter)
   return { ...process.env, PATH: merged, FORCE_COLOR: '0', NO_COLOR: '1' }
+}
+
+/**
+ * The environment a run's child process gets.
+ *
+ * For a vendor endpoint this is the whole integration: the Claude CLI is
+ * pointed at a different host and handed a different credential, and everything
+ * downstream — arguments, streaming, tool events, file-change detection — is
+ * unchanged.
+ *
+ * The isolated config directory is the part that matters, and it was not
+ * obvious. Setting `ANTHROPIC_AUTH_TOKEN` alone does *not* override a
+ * logged-in session: the CLI prefers its stored OAuth credentials, so a run the
+ * user asked DeepSeek to do went out with their personal Anthropic token in the
+ * `Authorization` header — to DeepSeek's servers. Pointing `CLAUDE_CONFIG_DIR`
+ * at a per-provider directory means there is no stored session to prefer, so
+ * the vendor key is the only credential available and the personal one cannot
+ * leave the machine. Verified against a stub endpoint; the check lives in
+ * tests/verify-agent.mjs so it cannot regress silently.
+ */
+async function vendorEnv(
+  provider: AiProvider,
+  spec: { compatible?: { baseUrlEnv: string; tokenEnv: string; defaultBaseUrl: string } },
+  key: string,
+  baseUrlOverride?: string,
+): Promise<NodeJS.ProcessEnv> {
+  const env = enrichedEnv()
+  if (!spec.compatible) return env
+
+  const configDir = path.join(app.getPath('userData'), 'vendor-cli', provider)
+  await fs.mkdir(configDir, { recursive: true }).catch(() => undefined)
+
+  return {
+    ...env,
+    CLAUDE_CONFIG_DIR: configDir,
+    [spec.compatible.baseUrlEnv]: baseUrlOverride?.trim() || spec.compatible.defaultBaseUrl,
+    [spec.compatible.tokenEnv]: key,
+    // Both are set because the CLI accepts either, and leaving the other
+    // inherited from the user's shell would reintroduce exactly the problem the
+    // config directory is here to prevent.
+    ANTHROPIC_API_KEY: key,
+  }
 }
 
 async function which(binary: string): Promise<string> {
@@ -253,18 +297,61 @@ export function registerAiHandlers(ctx: Ctx) {
             ? `Local models: ${ollama.slice(0, 4).join(', ')}${ollama.length > 4 ? `, +${ollama.length - 4}` : ''}`
             : 'No Ollama models found — pull one, e.g. `ollama pull qwen2.5-coder:0.5b`',
       },
+      // Vendor endpoints driven through the Claude CLI. "Available" means both
+      // halves are present: the binary that will run, and the key without which
+      // it would fail on the first request with an authentication error the
+      // user would have to go and interpret.
+      ...(await Promise.all(
+        compatibleProviders().map(async (spec) => {
+          const key = await readAiKey(spec.id)
+          return {
+            id: spec.id,
+            label: spec.label,
+            available: Boolean(claudeBin && key),
+            binary: claudeBin,
+            version: claudeVer,
+            hint: !claudeBin
+              ? `Needs the Claude Code CLI, which runs this endpoint: npm i -g @anthropic-ai/claude-code`
+              : !key
+                ? `Add an API key in Settings › AI — get one at ${spec.compatible!.console}`
+                : `Claude Code CLI against ${spec.compatible!.defaultBaseUrl}`,
+          }
+        }),
+      )),
     ]
   })
+
+  /** Which providers have a key stored. Never the keys themselves. */
+  ipcMain.handle('ai:storedKeys', () => storedAiKeys())
+
+  ipcMain.handle('ai:setKey', (_e, provider: AiProvider, key: string | null) =>
+    writeAiKey(provider, key),
+  )
 
   /** The models Ollama has locally, as `ollama/<name>` for opencode's `-m`. */
   ipcMain.handle('ai:localModels', () => ollamaModels())
 
   ipcMain.handle('ai:start', async (_e, req: AiStartRequest) => {
     const runId = `run_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
-    const binary = await which(req.provider)
+    // A vendor endpoint runs through another vendor's CLI, so what has to be on
+    // PATH is that binary rather than something named after the provider.
+    const spec = providerSpec(req.provider)
+    const binary = await which(spec.binary)
     if (!binary) {
       // No run exists yet, so these go out once the renderer acknowledges.
-      const message = `\`${req.provider}\` CLI was not found on PATH. Install it, then reopen the AI console.`
+      const message = `\`${spec.binary}\` CLI was not found on PATH. ${spec.install}`
+      queueUnstarted(runId, [
+        { type: 'error', runId, message },
+        { type: 'done', runId, ok: false },
+      ])
+      return { runId }
+    }
+
+    // Without a key the CLI would reach the vendor and come back with a raw
+    // authentication error, which is a worse way to learn the key is missing.
+    const vendorKey = spec.compatible ? await readAiKey(req.provider) : ''
+    if (spec.compatible && !vendorKey) {
+      const message = `No API key for ${spec.label}. Add one in Settings › AI — keys come from ${spec.compatible.console}.`
       queueUnstarted(runId, [
         { type: 'error', runId, message },
         { type: 'done', runId, ok: false },
@@ -281,10 +368,13 @@ export function registerAiHandlers(ctx: Ctx) {
     // Enabled plugins can hand the assistant extra tools. Resolved per run so
     // that enabling a plugin takes effect on the very next prompt.
     const mcp = (await ctx.mcpServers?.()) ?? []
+    // Dialect, not provider id: every Anthropic-compatible vendor speaks the
+    // Claude CLI's argument and event format, which is the entire reason they
+    // need no adapter of their own.
     const args =
-      req.provider === 'claude'
+      spec.dialect === 'claude'
         ? buildClaudeArgs(req, prompt, await writeClaudeMcpConfig(mcp))
-        : req.provider === 'opencode'
+        : spec.dialect === 'opencode'
           ? buildOpencodeArgs(req, prompt)
           : buildCodexArgs(req, prompt, codexMcpArgs(mcp))
 
@@ -292,7 +382,7 @@ export function registerAiHandlers(ctx: Ctx) {
     // `claude -p` otherwise stalls for seconds looking for piped input.
     const child = spawn(binary, args, {
       cwd: req.cwd,
-      env: enrichedEnv(),
+      env: await vendorEnv(req.provider, spec, vendorKey, req.baseUrl),
       stdio: ['ignore', 'pipe', 'pipe'],
     }) as AiChild
 
@@ -416,8 +506,9 @@ export function registerAiHandlers(ctx: Ctx) {
       emitFor(run, { type: 'log', runId: run.id, text: line })
       return
     }
-    if (run.provider === 'claude') await handleClaudeEvent(run, event)
-    else if (run.provider === 'opencode') await handleOpencodeEvent(run, event)
+    const dialect = providerSpec(run.provider).dialect
+    if (dialect === 'claude') await handleClaudeEvent(run, event)
+    else if (dialect === 'opencode') await handleOpencodeEvent(run, event)
     else await handleCodexEvent(run, event)
   }
 

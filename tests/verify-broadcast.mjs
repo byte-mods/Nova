@@ -303,7 +303,20 @@ const watched = await cdp.evaluate(
   await new Promise((r) => setTimeout(r, 3000))
   const w = document.querySelector('webview')
   if (!w) return { error: 'no browser pane' }
-  await w.loadURL(${j(URL_BASE)})
+
+  // A quick tunnel refuses the odd request while it settles, and loadURL
+  // rejects outright on an aborted load. Retrying here keeps a Cloudflare
+  // hiccup from being reported as a broken player.
+  let loaded = false
+  for (let attempt = 0; attempt < 4 && !loaded; attempt++) {
+    try {
+      await w.loadURL(${j(URL_BASE)})
+      loaded = true
+    } catch (err) {
+      await new Promise((r) => setTimeout(r, 4000))
+    }
+  }
+  if (!loaded) return { error: 'the tunnel never served the page to the pane' }
   await new Promise((r) => setTimeout(r, 12000))
 
   const read = () => w.executeJavaScript(\`(() => {
@@ -318,10 +331,18 @@ const watched = await cdp.evaluate(
     }
   })()\`)
 
+  // Sampled rather than snapshotted: a live player deliberately rides near the
+  // edge of what has arrived, so readyState dips to HAVE_METADATA between
+  // segments. One unlucky instant is not evidence of a stall — a clock that
+  // never moves is.
   const first = await read()
-  await new Promise((r) => setTimeout(r, 4000))
-  const later = await read()
-  return { first, later }
+  const samples = [first]
+  for (let i = 0; i < 4; i++) {
+    await new Promise((r) => setTimeout(r, 1500))
+    samples.push(await read())
+  }
+  const later = samples[samples.length - 1]
+  return { first, later, best: Math.max(...samples.map((s) => s.readyState)) }
 `,
   120000,
 )
@@ -339,8 +360,8 @@ check(
 )
 check(
   'it has buffered enough to play',
-  (watched.later?.readyState ?? 0) >= 2,
-  `readyState=${watched.later?.readyState}`,
+  (watched.best ?? 0) >= 2,
+  `best readyState across samples=${watched.best}`,
 )
 check(
   'and playback advances, so it is genuinely live',

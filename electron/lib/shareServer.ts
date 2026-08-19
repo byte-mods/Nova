@@ -41,6 +41,7 @@ import http from 'node:http'
 import path from 'node:path'
 import {
   shareMediaMime,
+  type ShareAgentState,
   type ShareBroadcastStatus,
   type ShareMediaChannel,
   type ShareMode,
@@ -98,6 +99,8 @@ export interface ShareServerHandle {
   pushMedia: (channel: ShareMediaChannel, chunk: Buffer) => void
   /** Drops the remembered header so the next chunk starts a new stream. */
   resetMedia: (channel: ShareMediaChannel) => void
+  /** Publishes what the agent is doing, so viewers can follow along. */
+  setAgent: (state: ShareAgentState) => void
   close: () => Promise<void>
 }
 
@@ -115,6 +118,7 @@ export async function startShareServer(options: ShareServerOptions): Promise<Sha
   const viewers = new Set<http.ServerResponse>()
   let presence: SharePresence = { activeFile: '' }
   let broadcast: ShareBroadcastStatus = idleBroadcast()
+  let agent: ShareAgentState = idleAgent()
 
   /**
    * A short window of recent media per channel.
@@ -183,6 +187,8 @@ export async function startShareServer(options: ShareServerOptions): Promise<Sha
     }
 
     if (route === '/broadcast') return json(res, broadcast)
+
+    if (route === '/agent') return json(res, agent)
 
     if (route === '/media') {
       const channel = url.searchParams.get('channel') === 'camera' ? 'camera' : 'main'
@@ -356,6 +362,18 @@ export async function startShareServer(options: ShareServerOptions): Promise<Sha
       endChannel(channel)
     },
 
+    setAgent(next) {
+      agent = next
+      const payload = `event: agent\ndata: ${JSON.stringify(next)}\n\n`
+      for (const viewer of viewers) {
+        try {
+          viewer.write(payload)
+        } catch {
+          viewers.delete(viewer)
+        }
+      }
+    },
+
     async close() {
       for (const viewer of viewers) {
         try {
@@ -378,6 +396,10 @@ export async function startShareServer(options: ShareServerOptions): Promise<Sha
     feed.bytes = 0
     for (const wake of [...feed.waiters]) wake()
   }
+}
+
+function idleAgent(): ShareAgentState {
+  return { active: false, request: '', status: '', steps: [], edits: [], running: false }
 }
 
 function idleBroadcast(): ShareBroadcastStatus {
@@ -598,6 +620,24 @@ function page(options: ShareServerOptions, token: string): string {
                    animation:pulse 1.6s infinite; }
   @keyframes pulse { 0%,100% { opacity:1 } 50% { opacity:.35 } }
   .live-hint { padding:6px 12px; color:var(--faint); font-size:11px; background:var(--panel); }
+
+  /* the agent panel */
+  #agent { display:none; border-bottom:1px solid var(--border); background:var(--panel);
+           padding:9px 14px; }
+  #agent.on { display:block; }
+  #agent h4 { margin:0 0 5px; font-size:12px; display:flex; align-items:center; gap:7px; }
+  #agent .req { color:var(--dim); font-size:11.5px; margin-bottom:7px; }
+  #agent ol { margin:0; padding-left:18px; font-size:11.5px; color:var(--dim); }
+  #agent li.done { color:var(--text); }
+  #agent li.running { color:var(--accent); }
+  #agent li.skipped { text-decoration:line-through; color:var(--faint); }
+  #agent .files { margin-top:7px; font:11px ui-monospace,monospace; color:var(--faint);
+                  display:flex; flex-wrap:wrap; gap:10px; }
+  #agent .add { color:#4ec9b0; }
+  #agent .del { color:#f2555a; }
+  #agent .verdict { margin-top:7px; font-size:11px; }
+  #agent .verdict.passed { color:#4ec9b0; }
+  #agent .verdict.failed { color:#f2555a; }
 </style>
 
 <header>
@@ -620,6 +660,8 @@ function page(options: ShareServerOptions, token: string): string {
     <div id="cam-wrap"><video id="cam-video" autoplay playsinline muted></video></div>
   </div>
 </div>
+
+<div id="agent"></div>
 
 <main>
   ${options.mode === 'project' ? '<nav id="tree"></nav>' : ''}
@@ -671,7 +713,12 @@ function page(options: ShareServerOptions, token: string): string {
         if (buffer.updating) return
         appending = true
         try {
-          buffer.appendBuffer(queue.shift())
+          // Peeked, not shifted: an append that throws must leave the chunk in
+          // the queue to be retried. Removing it first loses a segment, and a
+          // missing segment is a hole the decoder stalls on rather than an
+          // error anyone sees.
+          buffer.appendBuffer(queue[0])
+          queue.shift()
         } catch (err) {
           appending = false
           // QuotaExceeded is the expected one on a long stream: drop what has
@@ -681,6 +728,36 @@ function page(options: ShareServerOptions, token: string): string {
           }
         }
       }
+
+      /*
+       * Playback recovery.
+       *
+       * A live MSE stream stalls for reasons that are invisible from here: the
+       * element runs to the end of what is buffered before the next segment
+       * lands, a seek puts it in a gap, or autoplay was refused and the first
+       * play() rejected. All of them look identical — a frozen picture with
+       * data still arriving — and none of them fire an error. So rather than
+       * enumerate the causes, watch the symptom: if the clock is not moving and
+       * there is buffered media ahead, go to it.
+       */
+      let lastSeen = -1
+      state.watchdog = setInterval(() => {
+        if (source.readyState !== 'open' || !buffer) return
+        const ahead = buffer.buffered.length
+          ? buffer.buffered.end(buffer.buffered.length - 1)
+          : 0
+        const stuck = el.currentTime === lastSeen
+        lastSeen = el.currentTime
+        if (!stuck) return
+
+        // Landing further back than the very edge on purpose: a player parked
+        // on the last frame it has drops straight back to waiting for data, so
+        // recovering to the edge just stalls again a moment later.
+        if (ahead > el.currentTime + 0.5 && !buffer.updating) {
+          el.currentTime = Math.max(0, ahead - 1.5)
+        }
+        if (el.paused) el.play().catch(() => undefined)
+      }, 1000)
 
       // Polling for segments rather than reading one endless response: a
       // response that finishes is forwarded by every proxy in the path, while
@@ -733,6 +810,7 @@ function page(options: ShareServerOptions, token: string): string {
     const state = players[channel]
     if (!state) return
     delete players[channel]
+    if (state.watchdog) clearInterval(state.watchdog)
     try { state.abort.abort() } catch {}
     try { el.removeAttribute('src'); el.load() } catch {}
   }
@@ -775,6 +853,54 @@ function page(options: ShareServerOptions, token: string): string {
    * costs one small request and makes the page correct on those networks
    * instead of silently stale.
    */
+  /* ---------------- what the agent is doing ---------------- */
+
+  const agentEl = document.getElementById('agent')
+
+  function applyAgent(a) {
+    if (!a || !a.active) { agentEl.classList.remove('on'); return }
+    agentEl.classList.add('on')
+
+    const steps = (a.steps || []).map((s) =>
+      '<li class="' + esc(s.status) + '">' + esc(s.text) + '</li>').join('')
+
+    const files = (a.edits || []).map((e) =>
+      '<span>' + esc(e.path) + ' <span class="add">+' + e.additions +
+      '</span> <span class="del">\u2212' + e.deletions + '</span></span>').join('')
+
+    const v = a.verification
+    const verdict = v
+      ? '<div class="verdict ' + esc(v.state) + '">' +
+        (v.state === 'running' ? 'Running the project\u2019s tests\u2026'
+          : v.state === 'unavailable' ? 'No test suite to check this against'
+          : v.passed + '/' + v.total + ' tests pass' + (v.failed ? ' \u2014 ' + v.failed + ' failed' : '') +
+            ' (' + esc(v.framework) + ')') + '</div>'
+      : ''
+
+    agentEl.innerHTML =
+      '<h4>' + (a.running ? '<span class="rec"></span>' : '') +
+      'Assistant \u00b7 ' + esc(a.status) + '</h4>' +
+      (a.request ? '<div class="req">' + esc(a.request) + '</div>' : '') +
+      (steps ? '<ol>' + steps + '</ol>' : '') +
+      (files ? '<div class="files">' + files + '</div>' : '') +
+      verdict
+  }
+
+  let lastAgent = ''
+  const readAgent = () =>
+    fetch(BASE + '/agent', { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((a) => {
+        const seen = JSON.stringify(a)
+        if (seen === lastAgent) return
+        lastAgent = seen
+        applyAgent(a)
+      })
+      .catch(() => {})
+
+  readAgent()
+  setInterval(readAgent, 3000)
+
   let lastBroadcast = ''
   const readBroadcast = () =>
     fetch(BASE + '/broadcast', { cache: 'no-store' })
@@ -792,6 +918,10 @@ function page(options: ShareServerOptions, token: string): string {
   setInterval(readBroadcast, 3000)
 
   const events = new EventSource(BASE + '/events')
+  events.addEventListener('agent', (e) => {
+    lastAgent = e.data
+    applyAgent(JSON.parse(e.data))
+  })
   events.addEventListener('broadcast', (e) => {
     lastBroadcast = e.data
     applyBroadcast(JSON.parse(e.data))
