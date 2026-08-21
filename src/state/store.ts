@@ -390,7 +390,7 @@ interface State {
   sidebarVisible: boolean
   aiVisible: boolean
   panelVisible: boolean
-  panelTab: 'terminal' | 'problems' | 'usages' | 'hierarchy' | 'tests' | 'debug' | 'todo' | 'coverage' | 'build' | 'profile' | 'infra' | 'security'
+  panelTab: 'terminal' | 'problems' | 'usages' | 'hierarchy' | 'tests' | 'debug' | 'todo' | 'coverage' | 'build' | 'profile' | 'infra' | 'security' | 'devices'
 
   /** Last loaded coverage report, or null when none has been produced. */
   coverage: CoverageReport | null

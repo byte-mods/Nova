@@ -14,6 +14,51 @@ The steps for a release are in [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## 1.0.1
+
+### Android and iOS devices
+
+- A **Devices** panel listing every Android emulator, iOS simulator and attached
+  physical Android device, with start and stop.
+- The running device is **mirrored into a pane**: click to tap, drag to swipe,
+  type to send text. A drag of a few pixels is treated as a tap that moved, so
+  buttons stay pressable.
+- Install an `.apk` or `.app` onto the selected device, and stream `logcat`
+  under the screen.
+- The Android SDK is found without being on `PATH` — a complete Android Studio
+  install very often leaves `adb` unreachable from a shell, and reporting
+  "Android is not installed" to someone looking at Android Studio would be
+  useless.
+- What a platform cannot do is declared rather than hidden: `simctl` sends no
+  taps and exposes no device log, so those controls are visibly unavailable with
+  the reason attached, instead of silently doing nothing.
+
+### Fixes
+
+- **The welcome screen was cut off at the top** with the scrollbar already at the
+  top. A flex container that centres a child taller than itself puts that child
+  above the scroll origin, and there is no negative scroll to reach it. The
+  image viewer had the same defect, where it made the top of a zoomed image
+  unreachable. Both now centre with an auto margin, which stops when there is no
+  room instead of pushing content out of reach.
+- A mirrored frame could arrive **after** the mirror was stopped, painting a
+  stale screen onto a pane the user had moved away from — a capture already in
+  flight cannot be cancelled, so the result is now discarded unless the mirror
+  that asked for it is still the current one.
+
+### Testing
+
+- `verify-devices.mjs` (21) boots a real emulator and checks mirroring, input
+  and logs against it. Absent tooling is reported and skipped rather than passed,
+  and physical devices are listed but never driven — pressing Home on someone's
+  actual phone because it happened to be plugged in is an accident, not a test.
+- The tooltip suite gained a check that no scroll container centres a child it
+  could clip, so the welcome-screen class of bug fails a test rather than
+  waiting to be noticed at an unusual window size.
+- 476 live checks and 748 offline ones pass.
+
+---
+
 ## 1.0.0
 
 The first version worth calling one. Everything below is verified by **452 live

@@ -16,6 +16,7 @@ import { registerHttpHandlers } from './ipc/http'
 import { registerE2eHandlers } from './ipc/e2e'
 import { registerSecurityHandlers } from './ipc/security'
 import { registerShareHandlers } from './ipc/share'
+import { registerDeviceHandlers } from './ipc/devices'
 import { registerBuildHandlers } from './ipc/build'
 import { registerStructuralHandlers } from './ipc/structural'
 import { registerDatabaseHandlers } from './ipc/database'
@@ -165,6 +166,7 @@ app.whenReady().then(() => {
   registerE2eHandlers()
   registerSecurityHandlers({ broadcast })
   registerShareHandlers({ broadcast })
+  registerDeviceHandlers({ broadcast })
   registerBuildHandlers()
   registerStructuralHandlers()
   registerDatabaseHandlers()

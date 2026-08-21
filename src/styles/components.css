@@ -608,8 +608,15 @@
   flex: 1;
   overflow: auto;
   display: flex;
-  align-items: center;
-  justify-content: center;
+  /*
+   * Same reason as `.welcome`: centring a child larger than its scroll
+   * container puts the child's top-left outside the scrollable area, so zooming
+   * into a big image made the top of it permanently unreachable. `margin: auto`
+   * on the image centres it while it fits and gets out of the way when it does
+   * not.
+   */
+  align-items: flex-start;
+  justify-content: flex-start;
   padding: 30px;
   background-color: var(--bg-inset);
   background-image:
@@ -622,6 +629,7 @@
 }
 
 .image-canvas img {
+  margin: auto;
   max-width: 100%;
   transition: transform 0.15s ease;
   box-shadow: 0 6px 26px rgba(0, 0, 0, 0.35);
@@ -1201,7 +1209,16 @@
   inset: 0;
   overflow: auto;
   display: flex;
-  align-items: center;
+  /*
+   * Not `align-items: center`. Centring a flex child that is taller than its
+   * scroll container puts the child's top above the scroll origin, and there is
+   * no negative scroll to get back to it — so the heading was cut off with the
+   * scrollbar already at the top, which reads as the app being broken rather
+   * than as a layout that overflowed. `margin: auto` on the child centres it
+   * exactly the same way when there is room, and simply stops when there is
+   * not.
+   */
+  align-items: flex-start;
   justify-content: center;
   padding: 40px 24px;
 }
@@ -1210,6 +1227,8 @@
   width: min(940px, 100%);
   display: grid;
   gap: 30px;
+  /* Centres within the free space, without making the top unreachable. */
+  margin: auto;
 }
 
 .welcome-brand {
@@ -4616,4 +4635,166 @@
 .vendor-key-url {
   width: 100%;
   font-size: 11px;
+}
+
+/* ---- devices: emulators and simulators ---- */
+
+.devices-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.devices-warn {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  padding: 7px 11px;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border);
+}
+
+.devices-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.devices-list {
+  width: 260px;
+  flex-shrink: 0;
+  overflow: auto;
+  border-right: 1px solid var(--border);
+}
+
+.device-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+}
+
+.device-row:hover {
+  background: var(--hover);
+}
+
+.device-row.active {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.device-row .android {
+  color: #3ddc84;
+}
+
+.device-row .ios {
+  color: var(--text-dim);
+}
+
+.device-name {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.device-name span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.device-name .faint {
+  font-size: 10.5px;
+}
+
+.device-state.booted {
+  color: var(--success, #4ec9b0);
+}
+
+.device-state.booting {
+  color: var(--accent);
+}
+
+.device-state.shutdown {
+  color: var(--faint);
+}
+
+.device-screen-pane {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  overflow: auto;
+  padding: 12px;
+  gap: 10px;
+  background: var(--bg-inset);
+}
+
+.device-hint {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: auto;
+  font-size: 11.5px;
+  padding: 20px;
+  text-align: center;
+}
+
+/* Centred by its own auto margin rather than by the container, so a screen
+   taller than the pane keeps its top reachable. */
+.device-screen {
+  margin: auto;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: #000;
+  user-select: none;
+}
+
+.device-screen.interactive {
+  cursor: pointer;
+}
+
+.device-screen.interactive:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.device-logs {
+  width: 100%;
+  max-height: 170px;
+  overflow: auto;
+  margin: 0;
+  padding: 7px 9px;
+  border-radius: 5px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.devices-note {
+  border-top: 1px solid var(--border);
+  padding: 6px 11px;
+  max-height: 90px;
+  overflow: auto;
+}
+
+.devices-note pre {
+  margin: 0;
+  font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--text-dim);
+  white-space: pre-wrap;
 }

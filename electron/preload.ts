@@ -87,6 +87,15 @@ import type {
   ToolAvailability,
 } from '../shared/infra'
 import type { ChatSummary, StoredChat } from '../shared/chat'
+import type {
+  DeviceCapabilities,
+  DeviceFrame,
+  DeviceInput,
+  DeviceLogLine,
+  DevicePlatform,
+  DeviceToolStatus,
+  MobileDevice,
+} from '../shared/devices'
 
 
 /** Subscribe to a main-process push channel; returns an unsubscribe function. */
@@ -581,6 +590,31 @@ const api = {
     /** Clears the remembered stream header before a new recorder starts. */
     mediaReset: (channel: ShareMediaChannel): Promise<void> =>
       ipcRenderer.invoke('share:mediaReset', channel),
+  },
+  devices: {
+    /** Whether each platform's tooling is usable, and how to fix it if not. */
+    status: (): Promise<DeviceToolStatus[]> => ipcRenderer.invoke('devices:status'),
+    list: (): Promise<MobileDevice[]> => ipcRenderer.invoke('devices:list'),
+    /** What a platform can actually do, so the UI offers only what works. */
+    capabilities: (platform: DevicePlatform): Promise<DeviceCapabilities> =>
+      ipcRenderer.invoke('devices:capabilities', platform),
+    boot: (device: MobileDevice): Promise<{ ok: boolean; error?: string }> =>
+      ipcRenderer.invoke('devices:boot', device),
+    shutdown: (device: MobileDevice): Promise<void> => ipcRenderer.invoke('devices:shutdown', device),
+    startMirror: (device: MobileDevice): Promise<void> =>
+      ipcRenderer.invoke('devices:startMirror', device),
+    stopMirror: (deviceId: string): Promise<void> => ipcRenderer.invoke('devices:stopMirror', deviceId),
+    /** Resolves false when the platform cannot express that input. */
+    input: (device: MobileDevice, input: DeviceInput): Promise<boolean> =>
+      ipcRenderer.invoke('devices:input', device, input),
+    install: (device: MobileDevice, file: string): Promise<{ ok: boolean; output: string }> =>
+      ipcRenderer.invoke('devices:install', device, file),
+    launch: (device: MobileDevice, bundleId: string): Promise<{ ok: boolean; output: string }> =>
+      ipcRenderer.invoke('devices:launch', device, bundleId),
+    startLogs: (device: MobileDevice): Promise<boolean> => ipcRenderer.invoke('devices:startLogs', device),
+    stopLogs: (deviceId: string): Promise<void> => ipcRenderer.invoke('devices:stopLogs', deviceId),
+    onFrame: (cb: (frame: DeviceFrame) => void) => on('devices:frame', cb),
+    onLog: (cb: (line: DeviceLogLine) => void) => on('devices:log', cb),
   },
   plugins: {
     list: (): Promise<InstalledPlugin[]> => ipcRenderer.invoke('plugins:list'),

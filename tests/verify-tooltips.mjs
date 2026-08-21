@@ -95,7 +95,7 @@ console.log('\n-- bottom panels --')
 
 const PANELS = [
   'terminal', 'problems', 'usages', 'hierarchy', 'tests',
-  'debug', 'todo', 'coverage', 'build', 'profile', 'infra', 'security',
+  'debug', 'todo', 'coverage', 'build', 'profile', 'infra', 'security', 'devices',
 ]
 
 for (const panel of PANELS) {
@@ -333,6 +333,62 @@ check(
   'toolbar controls do not run into each other',
   spaced.missing === false && spaced.touching === 0,
   JSON.stringify(spaced),
+)
+
+/* ------------------------------------------------------------------ */
+console.log('\n-- nothing is clipped out of reach --')
+/* ------------------------------------------------------------------ */
+
+/*
+ * A scroll container that centres a child taller than itself puts that child's
+ * top above the scroll origin, and there is no negative scroll to reach it. The
+ * result is a heading cut in half with the scrollbar already at the top, which
+ * reads as a broken app rather than as content that overflowed. The rule is
+ * checked rather than the symptom, because the symptom only appears at window
+ * sizes nobody tests at.
+ */
+const centred = await cdp.evaluate(`
+  const offenders = []
+  for (const el of document.querySelectorAll('*')) {
+    const st = getComputedStyle(el)
+    if (st.display !== 'flex' && st.display !== 'inline-flex') continue
+    const scrolls = /auto|scroll/.test(st.overflowY) || /auto|scroll/.test(st.overflowX)
+    if (!scrolls) continue
+    // \`safe center\` is the CSS answer to this and is fine.
+    if (!/^center$/.test(st.alignItems) && !/^center$/.test(st.justifyContent)) continue
+    // A child using auto margins centres itself without escaping the origin.
+    const child = el.firstElementChild
+    if (child && /auto/.test(getComputedStyle(child).margin)) continue
+    offenders.push((el.className || el.tagName) + ' [' + st.alignItems + '/' + st.justifyContent + ']')
+  }
+  return offenders
+`)
+check(
+  'no scroll container centres a child it could clip',
+  centred.length === 0,
+  centred.join('\n        '),
+)
+
+// And the symptom itself, on the view that had it: shrink the window until the
+// welcome screen must overflow, then confirm its heading is still reachable.
+const welcome = await cdp.evaluate(`
+  const s = (await import('/src/state/store.ts')).useStore
+  s.getState().closeAllTabs?.()
+  s.setState({ aiVisible: false })
+  await new Promise((r) => setTimeout(r, 800))
+  const el = document.querySelector('.welcome')
+  const inner = document.querySelector('.welcome-inner')
+  if (!el || !inner) return { missing: true }
+  return {
+    missing: false,
+    innerTop: Math.round(inner.getBoundingClientRect().top),
+    containerTop: Math.round(el.getBoundingClientRect().top),
+  }
+`)
+check(
+  'the welcome screen never starts above its own container',
+  welcome.missing || welcome.innerTop >= welcome.containerTop - 1,
+  JSON.stringify(welcome),
 )
 
 console.log(`\n${pass} passed, ${fail} failed`)

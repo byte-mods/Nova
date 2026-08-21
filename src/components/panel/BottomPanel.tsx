@@ -16,6 +16,7 @@ import {
   Terminal as TerminalIcon,
   Trash2,
   X,
+  Smartphone,
 } from 'lucide-react'
 import { useStore } from '@/state/store'
 import TerminalView from './TerminalView'
@@ -30,6 +31,7 @@ import BuildView from './BuildView'
 import ProfileView from './ProfileView'
 import InfraView from './InfraView'
 import SecurityView from './SecurityView'
+import DevicesView from './DevicesView'
 
 export default function BottomPanel() {
   const height = useStore((s) => s.settings.panelHeight)
@@ -103,6 +105,13 @@ export default function BottomPanel() {
             onClick={() => useStore.getState().togglePanel('security')}
           >
             <ShieldAlert size={12} /> Security
+          </button>
+          <button
+            className={`pane-tab ${panelTab === 'devices' ? 'active' : ''}`}
+            title="Android emulators and iOS simulators, mirrored here"
+            onClick={() => useStore.getState().togglePanel('devices')}
+          >
+            <Smartphone size={12} /> Devices
           </button>
           <button
             className={`pane-tab ${panelTab === 'profile' ? 'active' : ''}`}
@@ -222,6 +231,7 @@ export default function BottomPanel() {
         {panelTab === 'profile' && <ProfileView />}
         {panelTab === 'infra' && <InfraView />}
         {panelTab === 'security' && <SecurityView />}
+        {panelTab === 'devices' && <DevicesView />}
         {panelTab === 'coverage' && <CoverageView />}
         {panelTab === 'problems' && <ProblemsView />}
         {panelTab === 'todo' && <TodoView />}

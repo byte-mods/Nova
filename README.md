@@ -4,12 +4,12 @@
 
 **A desktop IDE that brings IntelliJ-grade code intelligence, an API client, a browser, a security scanner and an AI pair to one window — then shares the whole session, screen and voice included, over a link.**
 
-[![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.0.1-blue.svg)](CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Electron](https://img.shields.io/badge/Electron-43-47848F?logo=electron&logoColor=white)](https://www.electronjs.org/)
 [![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)](https://react.dev/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.5-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-[![Tests](https://img.shields.io/badge/tests-452%20live%20%2B%20748%20offline-brightgreen.svg)](tests/FEATURES.md)
+[![Tests](https://img.shields.io/badge/tests-476%20live%20%2B%20748%20offline-brightgreen.svg)](tests/FEATURES.md)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%C2%B7%20Linux%20%C2%B7%20Windows-lightgrey.svg)](docs/INSTALLATION.md)
 
 <img src="docs/screenshot.png" alt="Nova IDE — editor, project tree, symbol index and the Explain button" width="100%">
@@ -476,6 +476,33 @@ see them before installing, and a call it was not granted fails at the call site
 with the permission named. Plugins can add commands, views, status-bar items —
 and **MCP servers**, which hand the AI console new tools.
 
+### Android and iOS, mirrored beside the code
+
+Mobile work has a window-shuffling problem rather than a capability problem: the
+emulator already runs, it just lives in another application that has to be found
+and raised. The **Devices** panel lists every Android emulator and iOS simulator
+on the machine, starts and stops them, and mirrors the running one into a pane —
+click to tap, drag to swipe, type to send text.
+
+Nothing is bundled. Nova drives the tools you already have: `adb` and `emulator`
+from the Android SDK, `xcrun simctl` from Xcode. The SDK does not need to be on
+your `PATH` — the usual install locations are checked, because a complete
+Android Studio install very often leaves `adb` unreachable from a shell.
+
+|  | Android | iOS |
+|---|---|---|
+| List, start, stop | ✅ | ✅ |
+| Live mirror | ✅ | ✅ |
+| Tap, swipe, type | ✅ | ✖ — `simctl` cannot send input |
+| Install an app | ✅ `.apk` | ✅ `.app` |
+| Device log | ✅ `logcat` | ✖ |
+
+The two gaps are stated rather than hidden: Apple drives simulator input through
+XCUITest, so a tap needs either that or the third-party `idb`. A control that
+silently does nothing would be worse than one that is visibly unavailable.
+
+---
+
 ---
 
 ## Tutorial — every feature, and how to use it
@@ -764,7 +791,30 @@ format are in **[docs/PLUGINS.md](docs/PLUGINS.md)**.
 </details>
 
 <details>
-<summary><b>12 · Make it yours</b></summary>
+<summary><b>12 · Run an emulator without leaving the window</b></summary>
+
+Open the **Devices** panel at the bottom (`⌘J` if the panel is hidden). Nova
+lists every Android emulator and iOS simulator it can find.
+
+1. Press **▶** beside an emulator to start it. It takes a while; the row shows
+   `booting` until the device reports itself actually ready, rather than as soon
+   as it answers.
+2. Click the row to mirror it. The screen appears in the pane beside the list.
+3. On Android, **click to tap, drag to swipe, and type to send text** — a drag
+   of a few pixels is treated as a tap that moved, so buttons stay pressable.
+4. **Install** puts an `.apk` or `.app` on the selected device. **Logs** streams
+   `logcat` underneath the screen.
+
+Physical Android devices show up here too, the moment they are plugged in.
+
+**Requires:** the Android SDK (Android Studio installs it) and/or Xcode for iOS.
+`simctl` ships with Xcode itself, not the Command Line Tools — if the panel says
+so, run `sudo xcode-select -s /Applications/Xcode.app`.
+
+</details>
+
+<details>
+<summary><b>13 · Make it yours</b></summary>
 
 **Settings** has ten themes that restyle the whole application, three file-icon
 packs, editor preferences, the language-server and debugger registries, and
@@ -865,6 +915,8 @@ Twelve more live-app suites run separately, each against the running IDE:
 | `verify-agent.mjs` | **45** — plans, revisions and test results across a reload; and a vendor run checked against a stub endpoint that records which credential actually went on the wire |
 | `verify-plugins.mjs` | **32** — installs a real plugin from a real git repository: the manifest, the fork, the permission gate, storage, contributed views and commands, disable/enable/uninstall, and the URLs it refuses |
 | `verify-broadcast.mjs` | **37** — opens a real tunnel, broadcasts real encoded media, and plays it back in a real Chromium over the public URL |
+| `verify-agent.mjs` | **45** — plan history, revisions, a late test result landing on the right plan, the provider gate, and a stub endpoint that records which credential a vendor run actually presents |
+| `verify-devices.mjs` | **21** — boots a real Android emulator, mirrors it, forwards input and streams logcat. Missing tooling is reported and skipped, never silently passed, and physical devices are listed but left alone |
 | `verify-semantic.mjs` | **14** — reads the colour the browser actually computed for a function, a type and a plain variable across twelve languages, then checks an installed server's own tokens come through |
 | `verify-http.mjs` | **23** — the request client over the real IPC bridge: requests, redirects with cookies, auth, GraphQL, and WebSocket and SSE streams reaching a renderer listener |
 | `verify-apitest.mjs` | **17** — suite runs, chaining, data-driven rows, the results panel, OpenAPI import and the mock server |
@@ -909,8 +961,8 @@ Also `npm run dist` for the current platform. Output lands in `release/`.
 
 ## Versioning
 
-Nova follows [semantic versioning](https://semver.org), currently **1.0.0**.
-Every push to `main` bumps the patch version, so the next one is `1.0.1`; the
+Nova follows [semantic versioning](https://semver.org), currently **1.0.1**.
+Every push to `main` bumps the patch version, so the next one is `1.0.2`; the
 release steps and what counts as a breaking change are in
 **[docs/RELEASING.md](docs/RELEASING.md)**, and what shipped in each version is
 in **[CHANGELOG.md](CHANGELOG.md)**.
