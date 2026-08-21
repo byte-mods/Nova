@@ -14,6 +14,31 @@ The steps for a release are in [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## 1.0.2
+
+### Panels you can actually find
+
+- **Every panel is now in the command palette** (`⇧⌘P` → "Coverage", "Security",
+  "Devices"…). The tab strip scrolls with its scrollbar deliberately hidden, so
+  when the window was narrow the panels past the edge had no route at all and no
+  sign they existed. Typing a name does not care how wide the window is.
+- The strip now **fades at whichever edge still has tabs behind it**, so there
+  is something on screen saying "keep going".
+- Activating a tab that is scrolled out of sight **brings it into view**, rather
+  than leaving the panel looking like it ignored the click.
+
+### Testing
+
+- The terminal section of the UI suite anchored itself to whatever directory the
+  previous suite's shell happened to be sitting in — a terminal outlives the
+  project that opened it, deliberately, so `cd src` landed somewhere unexpected
+  and a working feature was reported as broken. It now starts from a known
+  directory; what is under test is that `cd` persists, not where the shell began.
+- New checks that every panel is reachable by name and that an overflowing strip
+  says so.
+
+---
+
 ## 1.0.1
 
 ### Android and iOS devices

@@ -656,6 +656,46 @@ button.status-item:hover {
   flex-shrink: 0;
 }
 
+/*
+ * The strip scrolls with no scrollbar, so a fade marks the edge that still has
+ * tabs behind it. Without it there is nothing at all to say more panels exist —
+ * on a narrow window Coverage, Build and TODO were simply undiscoverable.
+ */
+.pane-tabs-wrap {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+}
+
+.pane-tabs-wrap::before,
+.pane-tabs-wrap::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 26px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  z-index: 1;
+}
+
+.pane-tabs-wrap::before {
+  left: 0;
+  background: linear-gradient(to right, var(--title-bar), transparent);
+}
+
+.pane-tabs-wrap::after {
+  right: 0;
+  background: linear-gradient(to left, var(--title-bar), transparent);
+}
+
+.pane-tabs-wrap.more-left::before,
+.pane-tabs-wrap.more-right::after {
+  opacity: 1;
+}
+
 .pane-tabs {
   display: flex;
   gap: 2px;
@@ -663,6 +703,8 @@ button.status-item:hover {
   min-width: 0;
   overflow-x: auto;
   scrollbar-width: none;
+  /* Keeps a tab from being left half-cut when it is scrolled to. */
+  scroll-behavior: smooth;
 }
 
 .pane-tabs::-webkit-scrollbar {

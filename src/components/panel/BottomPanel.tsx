@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   AlertTriangle,
   Bug,
@@ -49,10 +49,51 @@ export default function BottomPanel() {
     ? Math.round((coverage.totals.coveredLines / Math.max(coverage.totals.totalLines, 1)) * 100)
     : null
 
+  /*
+   * The tab strip scrolls horizontally with its scrollbar deliberately hidden,
+   * which looks clean and hides the fact that there are more tabs at all. On a
+   * narrow window Coverage, Build and TODO simply were not there as far as
+   * anyone could tell. A fade at whichever edge still has tabs behind it is the
+   * smallest thing that says "keep going" without putting a scrollbar back.
+   */
+  const tabsRef = useRef<HTMLDivElement>(null)
+  const [overflow, setOverflow] = useState({ left: false, right: false })
+
+  const measureOverflow = useCallback(() => {
+    const el = tabsRef.current
+    if (!el) return
+    // A pixel of slack: sub-pixel layout makes the exact comparison flicker.
+    setOverflow({
+      left: el.scrollLeft > 1,
+      right: el.scrollLeft + el.clientWidth < el.scrollWidth - 1,
+    })
+  }, [])
+
+  useEffect(() => {
+    measureOverflow()
+    const el = tabsRef.current
+    if (!el) return
+    // The strip overflows because of the window, not because of its content, so
+    // the resize of the element is what has to be watched.
+    const observer = new ResizeObserver(measureOverflow)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [measureOverflow])
+
+  // Selecting a tab from the palette or a shortcut can activate one that is
+  // scrolled out of sight; bring it back rather than leaving the panel looking
+  // like nothing happened.
+  useEffect(() => {
+    const active = tabsRef.current?.querySelector('.pane-tab.active')
+    active?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    measureOverflow()
+  }, [panelTab, measureOverflow])
+
   return (
     <div className="pane" style={{ height }}>
       <div className="pane-header">
-        <div className="pane-tabs">
+        <div className={`pane-tabs-wrap ${overflow.left ? 'more-left' : ''} ${overflow.right ? 'more-right' : ''}`}>
+        <div className="pane-tabs" ref={tabsRef} onScroll={measureOverflow}>
           <button
             className={`pane-tab ${panelTab === 'terminal' ? 'active' : ''}`}
             onClick={() => useStore.getState().togglePanel('terminal')}
@@ -151,6 +192,7 @@ export default function BottomPanel() {
           >
             <ListTodo size={12} /> TODO
           </button>
+        </div>
         </div>
 
         {panelTab === 'terminal' && (

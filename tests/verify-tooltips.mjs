@@ -391,6 +391,79 @@ check(
   JSON.stringify(welcome),
 )
 
+/* ------------------------------------------------------------------ */
+console.log('\n-- every panel is reachable --')
+/* ------------------------------------------------------------------ */
+
+/*
+ * The panel tab strip scrolls with its scrollbar hidden. That is fine until it
+ * overflows, at which point there is nothing on screen to say the remaining
+ * tabs exist — which is how Coverage, Build and TODO became undiscoverable on a
+ * narrow window. The fade is the affordance; this checks it appears exactly
+ * when it is needed, and that activating a hidden tab brings it into view.
+ */
+const strip = await cdp.evaluate(`
+  const s = (await import('/src/state/store.ts')).useStore
+  s.setState({ panelVisible: true })
+  await new Promise((r) => setTimeout(r, 400))
+  const wrap = document.querySelector('.pane-tabs-wrap')
+  const tabs = document.querySelector('.pane-tabs')
+  if (!wrap || !tabs) return { missing: true }
+  return {
+    missing: false,
+    overflowing: tabs.scrollWidth > tabs.clientWidth + 1,
+    marksRight: wrap.className.includes('more-right'),
+    marksLeft: wrap.className.includes('more-left'),
+    tabCount: tabs.querySelectorAll('.pane-tab').length,
+  }
+`)
+check('the panel tab strip is present', strip.missing === false, JSON.stringify(strip))
+check(
+  'and every panel has a tab',
+  strip.tabCount >= 12,
+  `${strip.tabCount} tabs`,
+)
+check(
+  'an overflowing strip says so, and one that fits does not',
+  strip.overflowing ? strip.marksRight || strip.marksLeft : !strip.marksRight && !strip.marksLeft,
+  JSON.stringify(strip),
+)
+
+// Activating a tab that is scrolled out of sight has to bring it back, or the
+// panel looks like it ignored the click.
+const revealed = await cdp.evaluate(`
+  const s = (await import('/src/state/store.ts')).useStore
+  s.getState().showPanel('terminal')
+  await new Promise((r) => setTimeout(r, 500))
+  s.getState().showPanel('devices')
+  await new Promise((r) => setTimeout(r, 900))
+  const tabs = document.querySelector('.pane-tabs')
+  const active = tabs?.querySelector('.pane-tab.active')
+  if (!tabs || !active) return { missing: true }
+  const a = active.getBoundingClientRect()
+  const t = tabs.getBoundingClientRect()
+  return { missing: false, visible: a.left >= t.left - 1 && a.right <= t.right + 1, label: active.textContent.trim() }
+`)
+check(
+  'activating a tab scrolled out of sight brings it into view',
+  revealed.missing || revealed.visible,
+  JSON.stringify(revealed),
+)
+
+// Reaching a panel must not depend on the window being wide enough to show its
+// tab. Typing its name is the route that always works.
+const palette = await cdp.evaluate(`
+  const { appActions } = await import('/src/lib/actions.ts')
+  const names = appActions().map((a) => a.label)
+  const wanted = ['Coverage', 'Security', 'Devices', 'TODO', 'Profiler', 'Build', 'Infra']
+  return { missing: wanted.filter((w) => !names.some((n) => n.includes(w))), total: names.length }
+`)
+check(
+  'every panel can be opened by name from the command palette',
+  palette.missing.length === 0,
+  JSON.stringify(palette.missing),
+)
+
 console.log(`\n${pass} passed, ${fail} failed`)
 await cdp.close()
 process.exit(fail ? 1 : 0)

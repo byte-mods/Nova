@@ -1635,6 +1635,7 @@ async function section14() {
   console.log('\n── 14. Terminal & run ──')
   await reset()
 
+
   await r.guard('14.1', 'terminal opens on a real pseudo-terminal', async () => {
     await openPanelTab('Terminal')
     const caps = await cdp.evaluate(`return await window.nova.shell.capabilities()`)
@@ -1690,6 +1691,18 @@ async function section14() {
   })
 
   await r.guard('14.3', 'cd persists between commands', async () => {
+    /*
+     * A terminal outlives the project that opened it — deliberately, since
+     * killing a running process on a project switch would be worse. That left
+     * this check reading whatever directory the previous suite's shell was
+     * sitting in, and reporting a working feature as broken. Anchor it first:
+     * what is under test is that `cd` persists to the next command, not where
+     * the shell happened to start.
+     */
+    await cdp.click('.terminal-host', { settle: 400 })
+    await cdp.type(`cd ${PROJECT}`)
+    await cdp.key('Enter')
+    await cdp.sleep(1500)
     await cdp.type('cd src')
     await cdp.key('Enter')
     await cdp.sleep(2500)

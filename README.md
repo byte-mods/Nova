@@ -4,12 +4,12 @@
 
 **A desktop IDE that brings IntelliJ-grade code intelligence, an API client, a browser, a security scanner and an AI pair to one window — then shares the whole session, screen and voice included, over a link.**
 
-[![Version](https://img.shields.io/badge/version-1.0.1-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.0.2-blue.svg)](CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Electron](https://img.shields.io/badge/Electron-43-47848F?logo=electron&logoColor=white)](https://www.electronjs.org/)
 [![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)](https://react.dev/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.5-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-[![Tests](https://img.shields.io/badge/tests-476%20live%20%2B%20748%20offline-brightgreen.svg)](tests/FEATURES.md)
+[![Tests](https://img.shields.io/badge/tests-479%20live%20%2B%20748%20offline-brightgreen.svg)](tests/FEATURES.md)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%C2%B7%20Linux%20%C2%B7%20Windows-lightgrey.svg)](docs/INSTALLATION.md)
 
 <img src="docs/screenshot.png" alt="Nova IDE — editor, project tree, symbol index and the Explain button" width="100%">
@@ -961,8 +961,8 @@ Also `npm run dist` for the current platform. Output lands in `release/`.
 
 ## Versioning
 
-Nova follows [semantic versioning](https://semver.org), currently **1.0.1**.
-Every push to `main` bumps the patch version, so the next one is `1.0.2`; the
+Nova follows [semantic versioning](https://semver.org), currently **1.0.2**.
+Every push to `main` bumps the patch version, so the next one is `1.0.3`; the
 release steps and what counts as a breaking change are in
 **[docs/RELEASING.md](docs/RELEASING.md)**, and what shipped in each version is
 in **[CHANGELOG.md](CHANGELOG.md)**.

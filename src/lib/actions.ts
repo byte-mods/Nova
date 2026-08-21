@@ -76,6 +76,23 @@ export function editorActions(editor: monacoNs.editor.ICodeEditor | null): Actio
 }
 
 /** The app's own commands: everything that is not a Monaco editor action. */
+/** The bottom panels, so the palette can reach every one by name. */
+const PANELS = [
+  { id: 'terminal' as const, label: 'Terminal' },
+  { id: 'problems' as const, label: 'Problems' },
+  { id: 'usages' as const, label: 'Usages' },
+  { id: 'hierarchy' as const, label: 'Hierarchy' },
+  { id: 'tests' as const, label: 'Tests' },
+  { id: 'debug' as const, label: 'Debug' },
+  { id: 'todo' as const, label: 'TODO' },
+  { id: 'coverage' as const, label: 'Coverage' },
+  { id: 'build' as const, label: 'Build' },
+  { id: 'profile' as const, label: 'Profiler' },
+  { id: 'infra' as const, label: 'Infra' },
+  { id: 'security' as const, label: 'Security' },
+  { id: 'devices' as const, label: 'Devices' },
+]
+
 export function appActions(): Action[] {
   const store = useStore.getState()
   const settings = store.settings
@@ -203,6 +220,22 @@ export function appActions(): Action[] {
     { id: 'browser', label: 'Open Built-in Browser', category: 'View', run: () =>
       store.openTab({ id: `browser:${Date.now()}`, kind: 'browser', title: 'Browser', url: settings.browserHome }) },
     { id: 'toggle-panel', label: 'Toggle Panel', category: 'View', hint: '⌘J', run: () => store.togglePanel() },
+
+    /*
+     * One entry per bottom panel.
+     *
+     * The tab strip scrolls when the window is narrow, and the panels that end
+     * up past its edge had no other route — a strip with a hidden scrollbar
+     * gives no sign they exist. Someone looking for coverage or the security
+     * scanner types its name, and the palette does not care how wide the
+     * window is.
+     */
+    ...PANELS.map((panel) => ({
+      id: `panel-${panel.id}`,
+      label: `${panel.label} Panel`,
+      category: 'View',
+      run: () => store.showPanel(panel.id),
+    })),
     { id: 'toggle-sidebar', label: 'Toggle Sidebar', category: 'View', hint: '⌘B', run: () => store.toggleSidebar() },
     { id: 'split', label: 'Split Editor Right', category: 'View', hint: '⌥⌘→', run: () => store.splitEditor() },
     { id: 'unsplit', label: 'Close Split', category: 'View', run: () => store.closeSplit() },
