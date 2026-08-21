@@ -160,6 +160,7 @@ const noSessions = (): Record<AiProvider, string | undefined> => ({
   codex: undefined,
   opencode: undefined,
   kimi: undefined,
+  gemini: undefined,
   glm: undefined,
   deepseek: undefined,
 })

@@ -19,7 +19,6 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { connect } from './cdp.mjs'
 import { TMP } from './env.mjs'
-import { startVendorEndpoint } from './stubs/vendor-endpoint.mjs'
 
 const PROJECT = path.join(TMP, 'agent-demo')
 
@@ -195,8 +194,12 @@ const panel = await cdp.evaluate(`
   const btn = [...document.querySelectorAll('.ai-header .icon-btn')]
     .find((b) => (b.title || '').startsWith('Plans this conversation'))
   if (!btn) return { missing: true }
-  btn.click()
-  await new Promise((r) => setTimeout(r, 600))
+  // The button toggles, so clicking it blind closes a panel a previous run
+  // left open. Converge on open instead of assuming which way it points.
+  for (let i = 0; i < 2 && !document.querySelector('.plan-history-row'); i++) {
+    btn.click()
+    await new Promise((r) => setTimeout(r, 700))
+  }
   const rows = [...document.querySelectorAll('.plan-history-row')]
   return {
     missing: false,
@@ -217,22 +220,24 @@ console.log('\n-- the providers --')
 const providers = await cdp.evaluate(`return await window.nova.ai.providers()`, 60000)
 const ids = providers.map((p) => p.id)
 check(
-  'all six providers are offered',
-  ['claude', 'codex', 'opencode', 'kimi', 'glm', 'deepseek'].every((id) => ids.includes(id)),
+  'all seven providers are offered',
+  ['claude', 'codex', 'opencode', 'kimi', 'gemini', 'glm', 'deepseek'].every((id) => ids.includes(id)),
   j(ids),
 )
+const keyed = providers.filter((p) => ['kimi', 'gemini', 'glm', 'deepseek'].includes(p.id))
 check(
-  'a vendor provider with no key is not reported as usable',
-  providers.filter((p) => ['kimi', 'glm', 'deepseek'].includes(p.id)).every((p) => !p.available),
-  j(providers.filter((p) => ['kimi', 'glm', 'deepseek'].includes(p.id)).map((p) => [p.id, p.available])),
+  'a provider whose CLI or key is missing is not reported as usable',
+  keyed.every((p) => !p.available),
+  j(keyed.map((p) => [p.id, p.available])),
 )
+// Each one runs its vendor's own CLI now, so the hint has to name the thing
+// that is actually missing rather than a generic apology.
 check(
-  'and says how to make it usable',
-  providers
-    .filter((p) => ['kimi', 'glm', 'deepseek'].includes(p.id))
-    .every((p) => /API key|Claude Code CLI/i.test(p.hint)),
-  j(providers.find((p) => p.id === 'kimi')?.hint),
+  'each names the CLI it needs',
+  keyed.every((p) => /kimi|gemini|opencode|API key/i.test(p.hint)),
+  j(keyed.map((p) => [p.id, p.hint.slice(0, 60)])),
 )
+
 
 // Starting a keyless vendor run must fail with an explanation rather than
 // reaching the network and returning whatever the vendor says about auth.
@@ -270,57 +275,49 @@ check('and becomes usable', keyFlow.available === true, j(keyFlow.available))
 check('the key is never handed back to the renderer', !j(keyFlow).includes('test-key-not-real'), 'the value appeared in the reply')
 check('and it can be forgotten', !keyFlow.after.includes('deepseek'), j(keyFlow.after))
 
-console.log('\n-- a vendor run reaches the vendor, with the vendor key --')
+console.log('\n-- each provider runs its own CLI --')
 
 /*
- * The whole point of this section. `ANTHROPIC_AUTH_TOKEN` on its own does not
- * override a logged-in Claude session, so a DeepSeek run went out carrying the
- * user's personal Anthropic OAuth token — to DeepSeek. Nothing inside the app
- * shows that: the run succeeds either way. Only the headers on the wire do.
+ * The routing is the claim worth checking. Previously several providers ran the
+ * Claude CLI with its base URL redirected, which inherited that CLI's auth
+ * precedence and sent a personal token to a third party. Each vendor now runs
+ * its own binary, so what has to be true is that the provider maps to the right
+ * one and that a missing binary is reported as such.
  */
-const vendor = await startVendorEndpoint()
+const routing = await cdp.evaluate(`
+  const { AI_PROVIDERS } = await import('/shared/aiProviders.ts')
+  return AI_PROVIDERS.map((p) => [p.id, p.binary, p.dialect])
+`)
+const expected = {
+  claude: 'claude', codex: 'codex', opencode: 'opencode',
+  kimi: 'kimi', gemini: 'gemini', glm: 'opencode', deepseek: 'opencode',
+}
+check(
+  'every provider is routed to the CLI its vendor ships',
+  routing.every(([id, binary]) => expected[id] === binary),
+  j(routing),
+)
+check(
+  'and nothing is pointed at the Claude CLI but Claude itself',
+  routing.filter(([, binary]) => binary === 'claude').length === 1,
+  j(routing.filter(([, b]) => b === 'claude')),
+)
 
-const routed = await cdp.evaluate(
-  `
-  await window.nova.ai.setKey('deepseek', 'sk-vendor-verifyagent')
+const missing = await cdp.evaluate(`
   const events = []
   const off = window.nova.ai.onEvent((e) => events.push(e))
-  const { runId } = await window.nova.ai.start({
-    provider: 'deepseek',
-    prompt: 'say hello',
-    cwd: ${j(PROJECT)},
-    baseUrl: ${j(vendor.origin)},
-  })
+  const { runId } = await window.nova.ai.start({ provider: 'gemini', prompt: 'hi', cwd: ${j(PROJECT)} })
   await window.nova.ai.ack(runId)
-  await new Promise((r) => setTimeout(r, 15000))
+  await new Promise((r) => setTimeout(r, 1500))
   off()
-  await window.nova.ai.setKey('deepseek', null)
-  return events
-    .filter((e) => e.runId === runId)
-    .map((e) => ({ type: e.type, text: (e.text ?? e.message ?? '').slice(0, 120) }))
-`,
-  90000,
-)
-
-const credentials = vendor.credentials()
-check('the run reaches the configured endpoint', vendor.requests.length > 0, `${vendor.requests.length} requests`)
+  return events.filter((e) => e.runId === runId).map((e) => ({ type: e.type, message: e.message }))
+`, 60000)
 check(
-  'the reply is parsed by the Claude stream reader',
-  routed.some((e) => e.type === 'assistant-text' && /stub reply/.test(e.text)),
-  j(routed.map((e) => e.type)),
+  'a provider whose CLI is absent fails with the install command, not a crash',
+  missing.some((e) => e.type === 'error' && /gemini|npm i -g/i.test(e.message ?? '')),
+  j(missing),
 )
-check(
-  'the vendor key is the credential presented',
-  credentials.some((c) => c.includes('sk-vendor-verifyagent')),
-  j(credentials.map((c) => c.slice(0, 22))),
-)
-check(
-  'and no personal Anthropic token is sent to the vendor',
-  !credentials.some((c) => /sk-ant-/.test(c)),
-  j(credentials.map((c) => c.slice(0, 22))),
-)
-
-await vendor.close()
+check('and the run is closed out', missing.some((e) => e.type === 'done'), j(missing.map((e) => e.type)))
 
 console.log('\n-- viewers can watch the agent work --')
 

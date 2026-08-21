@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Check, RefreshCw, RotateCcw } from 'lucide-react'
 import type { AiProvider } from '@shared/types'
-import { compatibleProviders } from '@shared/aiProviders'
+import { keyedProviders } from '@shared/aiProviders'
 import { useStore } from '@/state/store'
 import { themes } from '@/theme/themes'
 import { inspectionCatalogue } from '@/lib/inspections'
@@ -679,7 +679,7 @@ function VendorKeys() {
         OS keychain and are never shown again once saved.
       </p>
 
-      {compatibleProviders().map((spec) => {
+      {keyedProviders().map((spec) => {
         const has = stored.includes(spec.id)
         const urlKey = `aiBaseUrl_${spec.id}`
         const url = (settings.aiBaseUrls ?? {})[spec.id] ?? ''
@@ -699,7 +699,7 @@ function VendorKeys() {
               <button
                 className="link-btn"
                 title={`Open ${spec.label}'s console to create an API key`}
-                onClick={() => void window.nova.app.openExternal(spec.compatible!.console)}
+                onClick={() => void window.nova.app.openExternal(spec.console!)}
               >
                 Get a key
               </button>
@@ -741,7 +741,7 @@ function VendorKeys() {
               key={urlKey}
               className="vendor-key-url mono"
               spellCheck={false}
-              placeholder={spec.compatible!.defaultBaseUrl}
+              placeholder={spec.defaultModel ?? ''}
               title="Where requests go. Left blank, the vendor's documented address is used."
               value={url}
               onChange={(e) =>
@@ -751,7 +751,7 @@ function VendorKeys() {
               }
             />
             <small className="faint">
-              Suggested model: <code className="mono">{spec.compatible!.defaultModel}</code> — put it
+              Suggested model: <code className="mono">{spec.defaultModel!}</code> — put it
               in “Model override” when this provider is selected.
             </small>
 

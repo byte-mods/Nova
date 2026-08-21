@@ -14,6 +14,45 @@ The steps for a release are in [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## 1.1.0
+
+### Every assistant runs its vendor's own CLI
+
+- **Gemini** joins as a provider, on the `gemini` CLI.
+- **Kimi** now runs the `kimi` CLI rather than borrowing Claude's.
+- **GLM** and **DeepSeek** run through `opencode`, which is a real client for
+  them rather than an endpoint impersonating someone else's API.
+- Claude, Codex and OpenCode are unchanged.
+
+The previous arrangement pointed several providers at the Claude CLI with
+`ANTHROPIC_BASE_URL` redirected. It worked, and it was the wrong shape: it
+inherited that CLI's auth precedence — which is how a personal Anthropic token
+nearly went to a third party — and a model was only ever as good as its ability
+to impersonate another vendor's protocol. Each CLI now reads its credential from
+its own environment variable and nothing is redirected.
+
+Gemini and Kimi emit the same JSONL, so they share one reader. It is deliberately
+tolerant: these CLIs rename fields between minor versions, and the failure that
+matters is not a lost tool annotation but an empty reply because one key moved.
+Text is looked for in every shape it is plausibly written in, and unknown event
+types are ignored rather than thrown on.
+
+### Testing
+
+- `test-providers.mjs` (29) exercises the reader against the event kinds taken
+  from the shipped Gemini CLI — `system`, `assistant`, `user`, `tool_call`,
+  `tool_result`, `result`, `error` — including three different spellings of a
+  failed tool result and the final line that repeats the whole answer.
+- The live suite checks every provider maps to the binary its vendor ships, that
+  nothing but Claude points at the Claude CLI, and that a missing CLI fails with
+  its install command rather than a crash.
+
+Neither the Gemini nor the Kimi CLI is installed on the machine this was written
+on, so the reader is verified against those shapes rather than against a live
+run. That is a weaker claim and is stated as one.
+
+---
+
 ## 1.0.2
 
 ### Panels you can actually find

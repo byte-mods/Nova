@@ -142,7 +142,14 @@ export interface FileChange {
  * it has configured) rather than to a hosted API, so a project can be worked on
  * with no network and no per-token cost.
  */
-export type AiProvider = 'claude' | 'codex' | 'opencode' | 'kimi' | 'glm' | 'deepseek'
+export type AiProvider =
+  | 'claude'
+  | 'codex'
+  | 'opencode'
+  | 'kimi'
+  | 'gemini'
+  | 'glm'
+  | 'deepseek'
 
 export type AiEvent =
   | { type: 'session'; sessionId: string; runId: string }
