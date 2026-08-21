@@ -88,7 +88,27 @@ function createWindow() {
     },
   })
 
-  mainWindow.once('ready-to-show', () => mainWindow?.show())
+  /*
+   * Showing the window is deliberately belt-and-braces.
+   *
+   * `show: false` until `ready-to-show` avoids a flash of unpainted chrome, but
+   * it makes the reveal depend on a single event — and when that event does not
+   * arrive the app runs perfectly with its renderer loaded and simply never
+   * appears, which is indistinguishable from a crash and much harder to
+   * diagnose. That happened in a packaged build whose renderer had finished
+   * loading and rendering.
+   *
+   * So: show on whichever signal arrives first, and fall back to a timer that
+   * shows it regardless. A brief flash is a cosmetic problem; an invisible
+   * editor is not a usable one.
+   */
+  const reveal = () => {
+    if (!mainWindow || mainWindow.isDestroyed() || mainWindow.isVisible()) return
+    mainWindow.show()
+  }
+  mainWindow.once('ready-to-show', reveal)
+  mainWindow.webContents.once('did-finish-load', reveal)
+  setTimeout(reveal, 4000)
 
   // Anything the app itself tries to open in a new window goes to the OS browser;
   // in-app browsing happens inside the <webview> pane instead.

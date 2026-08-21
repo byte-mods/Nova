@@ -27,6 +27,16 @@ The steps for a release are in [docs/RELEASING.md](docs/RELEASING.md).
 - Activating a tab that is scrolled out of sight **brings it into view**, rather
   than leaving the panel looking like it ignored the click.
 
+### The packaged app could start with no window
+
+- `show: false` until `ready-to-show` avoids a flash of unpainted chrome, but it
+  made the reveal depend on a single event. In a packaged build that event did
+  not arrive: the app started, the renderer loaded and rendered the welcome
+  screen, and the window was simply never shown — indistinguishable from a crash
+  from the outside, and considerably harder to diagnose. The window is now
+  revealed by whichever of `ready-to-show`, `did-finish-load` or a short timer
+  comes first. A brief flash is cosmetic; an invisible editor is not usable.
+
 ### Testing
 
 - The terminal section of the UI suite anchored itself to whatever directory the
