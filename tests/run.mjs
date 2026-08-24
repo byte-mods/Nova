@@ -55,6 +55,7 @@ const BUNDLES = [
   ['electron/lib/sastRules.ts', 'sastRules'],
   ['electron/lib/depAudit.ts', 'depAudit'],
   ['electron/lib/geminiStream.ts', 'geminiStream'],
+  ['src/lib/fileIcons.tsx', 'fileIcons'],
 ]
 
 const OFFLINE = [
@@ -74,6 +75,7 @@ const OFFLINE = [
   'test-e2e',
   'test-security',
   'test-providers',
+  'test-icons',
   'test-tools',
 ]
 const TOOLS = ['test-lsp', 'test-hier', 'test-dap-py']

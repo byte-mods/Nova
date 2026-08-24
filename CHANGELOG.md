@@ -14,6 +14,40 @@ The steps for a release are in [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## 1.1.1
+
+### File icons for everything
+
+- The tree now recognises **around 190 extensions and 70 filenames**, up from
+  roughly fifty. Python, Rust, Go, Ruby, Java, Swift, Vue, Svelte, Elixir,
+  Haskell, Solidity, Terraform, notebooks, archives, fonts, media and the rest
+  each get their own glyph and their language's own colour, so a tree is
+  scannable by hue before a single name is read.
+- **Credentials stand out.** `.env`, `.env.production`, `.pem`, `.keystore` and
+  friends get a padlock or a key rather than a generic file, because noticing
+  one in a tree is the point.
+- **Precedence is explicit**: a whole filename beats a compound suffix beats an
+  extension. `Cargo.toml` is not just any TOML, `client.d.ts` is a declaration
+  rather than source, and a lockfile is visually distinct from the manifest it
+  belongs to — one is hand-edited and the other never is.
+- **An unknown extension still gets a plain file icon.** Guessing from three
+  letters Nova has never seen would be confidently wrong rather than quietly
+  neutral.
+
+Glyphs are shared where nothing better is known. There is no Lucide icon for
+Nim, and picking an arbitrary one would say something untrue about the language;
+a generic code glyph in Nim's yellow says exactly as much as is actually known.
+
+### Testing
+
+- `test-icons.mjs` (39) covers the precedence rules, the `.env` variants, the
+  three icon packs, and asserts that fifty-eight common file types all resolve
+  to something specific while an unknown extension does not.
+- Verified in a real tree as well as in the resolver: thirty-four files of
+  different types rendered, each with the expected glyph and colour.
+
+---
+
 ## 1.1.0
 
 ### Every assistant runs its vendor's own CLI
