@@ -14,6 +14,15 @@ The steps for a release are in [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## 1.1.2
+
+- The README's opening paragraph still said the assistants were reached
+  "through" the Claude CLI, which stopped being true in 1.1.0. Corrected, and
+  the mobile-device mirror added to the same sentence — it had been missing
+  since 1.0.1.
+
+---
+
 ## 1.1.1
 
 ### File icons for everything
