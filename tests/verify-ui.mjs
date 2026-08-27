@@ -927,14 +927,41 @@ async function section8() {
   })
 
   await r.guard('8.2', 'loads a URL typed into the address bar', async () => {
-    const box = await cdp.boxOf('.browser-address input')
-    await cdp.clickPoint(box, { clickCount: 3 })
-    await cdp.sleep(200)
-    await cdp.type(`${site.origin}/`)
+    /*
+     * Confirm the field actually took the text before committing it.
+     *
+     * The pane hosts a webview that can take focus back after the click, so
+     * typing occasionally went nowhere and the check reported a working browser
+     * as broken — the address bar still holding the home page it started on.
+     * Retrying against what the field contains is the difference between
+     * testing the browser and testing the timing.
+     */
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const box = await cdp.boxOf('.browser-address input')
+      await cdp.clickPoint(box, { clickCount: 3 })
+      await cdp.sleep(250)
+      await cdp.type(`${site.origin}/`)
+      await cdp.sleep(250)
+      const typed = await cdp.evaluate(
+        `return document.querySelector('.browser-address input')?.value ?? ''`,
+      )
+      if (typed.includes(String(site.port))) break
+    }
     await cdp.key('Enter')
-    await cdp.sleep(3000)
-    const url = await cdp.evaluate(`const w=document.querySelector('webview'); return w?w.getURL():''`)
-    return { ok: url.includes(String(site.port)), detail: url }
+    // Wait for the navigation rather than guessing how long it takes. A fixed
+    // sleep made this fail on a slow load and pass on a fast one, which is a
+    // report about the machine rather than about the browser pane.
+    const url = await cdp
+      .waitFor(
+        `(() => {
+          const w = document.querySelector('webview')
+          const u = w ? w.getURL() : ''
+          return u.includes(${JSON.stringify(String(site.port))}) ? u : null
+        })()`,
+        { timeout: 20000, interval: 500, label: 'the typed URL to load' },
+      )
+      .catch(() => '')
+    return { ok: Boolean(url), detail: url || 'never navigated' }
   })
 
   await r.guard('8.3', 'renders the page (real DOM in the guest)', async () => {
@@ -2506,7 +2533,16 @@ async function section19() {
     await cdp.evaluate(`
       const s=(await import('/src/state/store.ts')).useStore
       await s.getState().openFile(${JSON.stringify(target)}); return true`)
-    await cdp.sleep(1500)
+    // Wait for the gutter to draw rather than assuming 1.5s is enough. Opening
+    // a file and rendering its decorations is slower when the suite has already
+    // put the editor through eighteen other sections.
+    await cdp
+      .waitFor(`document.querySelectorAll('.nova-breakpoint').length >= 3`, {
+        timeout: 15000,
+        interval: 400,
+        label: 'breakpoint glyphs',
+      })
+      .catch(() => undefined)
     const classes = await cdp.evaluate(
       `return [...document.querySelectorAll('.nova-breakpoint')].map(e=>e.className).join(' ')`,
     )

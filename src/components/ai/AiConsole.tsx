@@ -119,6 +119,21 @@ export default function AiConsole() {
     modeRef.current = mode
     if (displayText) requestRef.current = displayText
 
+    // Remember a model the moment it is actually used, so the next run offers
+    // it. Only on use: typing into the field should not fill the list with
+    // half-finished names.
+    if (settings.aiModel) {
+      const seen = settings.aiRecentModels?.[settings.aiProvider] ?? []
+      if (!seen.includes(settings.aiModel)) {
+        store.setSettings({
+          aiRecentModels: {
+            ...(settings.aiRecentModels ?? {}),
+            [settings.aiProvider]: [settings.aiModel, ...seen].slice(0, 8),
+          },
+        })
+      }
+    }
+
     const { runId: id } = await window.nova.ai.start({
       provider: settings.aiProvider,
       // The context block orients the agent on what the user is looking at;
@@ -258,29 +273,43 @@ export default function AiConsole() {
         the narrowest width the panel can be dragged to.
       */}
       <div className="ai-model-row">
-        <select
-          className="select"
-          style={{ maxWidth: 128 }}
-          title={
-            spec.models?.length || localModels.length
-              ? 'Which model, and how much thinking it does. Faster models answer sooner and cost less.'
-              : 'This assistant chooses its own model'
-          }
+        {/*
+          A combobox, not a list.
+
+          A fixed dropdown of models is stale the week after it is written —
+          vendors ship new ones constantly, and being unable to select one
+          because Nova has not heard of it yet is a wall. The suggestions are
+          the common choices, labelled by the trade they make; anything else can
+          simply be typed. The suggested ids are aliases where the vendor offers
+          them (`opus`, `sonnet`), since those follow the latest model rather
+          than pinning a version that expires.
+        */}
+        <input
+          className="ai-model-input"
+          list="nova-model-suggestions"
+          spellCheck={false}
+          placeholder="Default model"
+          title="Which model to use. Pick a suggestion or type any model this CLI accepts."
           value={settings.aiModel}
           onChange={(e) => useStore.getState().setSettings({ aiModel: e.target.value })}
-        >
-          <option value="">Default model</option>
-          {(spec.models ?? []).map((m) => (
-            <option key={m.id} value={m.id}>
-              {m.label} · {MODEL_TIERS.find((t) => t.id === m.tier)?.label}
-            </option>
+        />
+        <datalist id="nova-model-suggestions">
+          {/* What this machine has actually used comes first: it is the only
+              part of this list that cannot be out of date. */}
+          {(settings.aiRecentModels?.[settings.aiProvider] ?? []).map((m) => (
+            <option key={`recent-${m}`} value={m} />
           ))}
+          {(spec.models ?? [])
+            .filter((m) => !(settings.aiRecentModels?.[settings.aiProvider] ?? []).includes(m.id))
+            .map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.label} · {MODEL_TIERS.find((t) => t.id === m.tier)?.label}
+              </option>
+            ))}
           {localModels.map((m) => (
-            <option key={m} value={m}>
-              {m}
-            </option>
+            <option key={m} value={m} />
           ))}
-        </select>
+        </datalist>
 
         {spec.efforts && (
           <select

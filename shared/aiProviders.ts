@@ -17,6 +17,15 @@
  *
  * `dialect` is how the output stream is read, not who made it — Gemini and Kimi
  * both emit the same JSONL event shapes, so they share a reader.
+ *
+ * **The model ids below are suggestions, checked against each vendor's own
+ * documentation in August 2026, and they will go out of date.** That is not a
+ * flaw to be fixed by checking harder: vendors ship models faster than an
+ * editor ships releases. The field these populate accepts anything typed into
+ * it, and remembers what has actually been used, so a model released tomorrow
+ * works today without waiting for anyone. Where a vendor offers an alias that
+ * follows its own latest — Claude's `opus`, `sonnet` — the alias is preferred
+ * over a pinned id for exactly that reason.
  */
 import type { AiProvider } from './types'
 
@@ -58,16 +67,16 @@ export interface AiProviderSpec {
   /** Suggested model id, shown as the placeholder in Settings. */
   defaultModel?: string
   /**
-   * Models this CLI can be pointed at, cheapest first.
+   * Suggested models, cheapest first — suggestions, never a whitelist.
    *
-   * A list, not a free-text box, because the failure of a typo is a run that
-   * gets partway in and dies on an unrecognised model. `tier` is the trade
-   * being made — a smaller model answers sooner and costs less; a larger one
-   * thinks longer — expressed the way vendors actually ship it, as a choice of
-   * model rather than as an abstract dial.
+   * Vendors ship new models constantly, and a hardcoded list is stale the week
+   * after it is written; the field these populate accepts anything typed into
+   * it, so a model released tomorrow works today. **Aliases are preferred over
+   * pinned versions** for exactly this reason: `opus` follows the latest Opus,
+   * where `claude-opus-4` is a fact with an expiry date.
    *
    * Empty for OpenCode, whose models are whatever Ollama has pulled locally and
-   * are therefore discovered at runtime rather than listed here.
+   * are discovered at runtime instead.
    */
   models?: { id: string; label: string; tier: ModelTier }[]
   /**
@@ -87,11 +96,15 @@ export const AI_PROVIDERS: AiProviderSpec[] = [
     label: 'Claude Code',
     binary: 'claude',
     dialect: 'claude',
+    // Aliases, which the CLI resolves to the current model of that name.
     models: [
       { id: 'haiku', label: 'Haiku', tier: 'fast' },
+      { id: 'fable', label: 'Fable', tier: 'fast' },
       { id: 'sonnet', label: 'Sonnet', tier: 'balanced' },
       { id: 'opus', label: 'Opus', tier: 'deep' },
     ],
+    // Straight from `claude --help`.
+    efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
     install: 'npm i -g @anthropic-ai/claude-code',
   },
   {
@@ -100,8 +113,10 @@ export const AI_PROVIDERS: AiProviderSpec[] = [
     binary: 'codex',
     dialect: 'codex',
     models: [
-      { id: 'gpt-5-codex-mini', label: 'GPT-5 Codex mini', tier: 'fast' },
-      { id: 'gpt-5-codex', label: 'GPT-5 Codex', tier: 'balanced' },
+      { id: 'gpt-5.6-luna', label: 'GPT-5.6 Luna', tier: 'fast' },
+      { id: 'gpt-5.3-codex', label: 'GPT-5.3 Codex', tier: 'balanced' },
+      { id: 'gpt-5.6-terra', label: 'GPT-5.6 Terra', tier: 'balanced' },
+      { id: 'gpt-5.6-sol', label: 'GPT-5.6 Sol', tier: 'deep' },
     ],
     // `codex exec` takes this straight through as a config override.
     efforts: ['low', 'medium', 'high'],
@@ -121,11 +136,10 @@ export const AI_PROVIDERS: AiProviderSpec[] = [
     dialect: 'gemini',
     keyEnv: 'MOONSHOT_API_KEY',
     console: 'https://platform.moonshot.ai/console/api-keys',
-    defaultModel: 'kimi-k2-turbo-preview',
+    defaultModel: 'kimi-k3',
     models: [
       { id: 'kimi-k2-turbo-preview', label: 'K2 Turbo', tier: 'fast' },
-      { id: 'kimi-k2-0905-preview', label: 'K2', tier: 'balanced' },
-      { id: 'kimi-k2-thinking', label: 'K2 Thinking', tier: 'deep' },
+      { id: 'kimi-k3', label: 'K3', tier: 'deep' },
     ],
     install: 'Install the Kimi CLI: uv tool install kimi-cli — then add a Moonshot key in Settings › AI',
   },
@@ -136,11 +150,11 @@ export const AI_PROVIDERS: AiProviderSpec[] = [
     dialect: 'gemini',
     keyEnv: 'GEMINI_API_KEY',
     console: 'https://aistudio.google.com/apikey',
-    defaultModel: 'gemini-2.5-pro',
+    defaultModel: 'gemini-3.7-flash',
     models: [
-      { id: 'gemini-2.5-flash-lite', label: '2.5 Flash Lite', tier: 'fast' },
-      { id: 'gemini-2.5-flash', label: '2.5 Flash', tier: 'balanced' },
-      { id: 'gemini-2.5-pro', label: '2.5 Pro', tier: 'deep' },
+      { id: 'gemini-3.5-flash', label: '3.5 Flash', tier: 'fast' },
+      { id: 'gemini-3.6-flash', label: '3.6 Flash', tier: 'balanced' },
+      { id: 'gemini-3.7-flash', label: '3.7 Flash', tier: 'deep' },
     ],
     install: 'npm i -g @google/gemini-cli — then add a Gemini key in Settings › AI, or run `gemini` once to sign in',
   },
@@ -151,10 +165,11 @@ export const AI_PROVIDERS: AiProviderSpec[] = [
     dialect: 'opencode',
     keyEnv: 'ZHIPU_API_KEY',
     console: 'https://z.ai/manage-apikey/apikey-list',
-    defaultModel: 'zhipuai/glm-4.6',
+    defaultModel: 'zhipuai/glm-5.3',
     models: [
-      { id: 'zhipuai/glm-4.5-air', label: 'GLM 4.5 Air', tier: 'fast' },
-      { id: 'zhipuai/glm-4.6', label: 'GLM 4.6', tier: 'balanced' },
+      { id: 'zhipuai/glm-4.6', label: 'GLM 4.6', tier: 'fast' },
+      { id: 'zhipuai/glm-5.2', label: 'GLM 5.2', tier: 'balanced' },
+      { id: 'zhipuai/glm-5.3', label: 'GLM 5.3', tier: 'deep' },
     ],
     install: 'npm i -g opencode-ai — then add a Z.ai key in Settings › AI',
   },
@@ -165,10 +180,10 @@ export const AI_PROVIDERS: AiProviderSpec[] = [
     dialect: 'opencode',
     keyEnv: 'DEEPSEEK_API_KEY',
     console: 'https://platform.deepseek.com/api_keys',
-    defaultModel: 'deepseek/deepseek-chat',
+    defaultModel: 'deepseek/deepseek-v4-pro',
     models: [
-      { id: 'deepseek/deepseek-chat', label: 'Chat', tier: 'balanced' },
-      { id: 'deepseek/deepseek-reasoner', label: 'Reasoner', tier: 'deep' },
+      { id: 'deepseek/deepseek-v4-flash', label: 'V4 Flash', tier: 'fast' },
+      { id: 'deepseek/deepseek-v4-pro', label: 'V4 Pro', tier: 'deep' },
     ],
     install: 'npm i -g opencode-ai — then add a DeepSeek key in Settings › AI',
   },

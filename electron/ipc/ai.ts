@@ -754,6 +754,8 @@ function buildClaudeArgs(req: AiStartRequest, prompt: string, mcpConfig: string 
     req.permissionMode ?? 'acceptEdits',
   ]
   if (req.model) args.push('--model', req.model)
+  // The CLI takes effort directly: low | medium | high | xhigh | max.
+  if (req.effort) args.push('--effort', req.effort)
   if (req.resumeSessionId) args.push('--resume', req.resumeSessionId)
   // Merged with, not substituted for, the user's own MCP config.
   if (mcpConfig) args.push('--mcp-config', mcpConfig)

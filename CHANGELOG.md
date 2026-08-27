@@ -14,6 +14,42 @@ The steps for a release are in [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## 1.2.1
+
+### Current models, and a list that cannot go stale again
+
+- **Model ids updated** against each vendor's own documentation, August 2026:
+  `kimi-k3`; `gpt-5.6-sol` / `terra` / `luna` alongside `gpt-5.3-codex`;
+  `gemini-3.7-flash` and the 3.x line; `glm-5.3`; `deepseek-v4-pro` and
+  `v4-flash`. Claude keeps its aliases — `opus`, `sonnet`, `haiku`, `fable` —
+  which resolve to the current model of that name and therefore never expire.
+- **The model field is a combobox, not a dropdown.** Any list shipped with an
+  editor is stale the week after it is written, and being unable to select a
+  model because Nova has not heard of it is a wall. Suggestions are offered;
+  anything can be typed.
+- **Models you use are remembered** per provider and offered first from then on
+  — the only part of the list that cannot be out of date.
+- **Claude gains its effort dial**: `low`, `medium`, `high`, `xhigh`, `max`,
+  taken from `claude --help` rather than assumed. It was omitted in 1.2.0 on the
+  incorrect belief that the CLI had no such flag.
+- Switching provider clears the model, since asking Gemini for `opus` fails at
+  the CLI.
+
+### Test flakiness
+
+Three checks that reported the machine rather than the product:
+
+- The browser address bar typed a URL and slept for three seconds. The pane's
+  webview can take focus back after the click, so the typing sometimes went
+  nowhere, and a slow load failed a check that a fast one passed. It now
+  confirms the field took the text and waits for the navigation.
+- The breakpoint-gutter check counted glyphs after a fixed sleep, which is not
+  long enough by the time the suite has been through eighteen other sections.
+- The terminal section's working directory, fixed in 1.0.2, gained the same
+  treatment for the shell it inherits.
+
+---
+
 ## 1.2.0
 
 ### The console could wedge, and did

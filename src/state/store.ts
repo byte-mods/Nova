@@ -286,6 +286,16 @@ export interface Settings {
   aiFollowEdits?: boolean
   /** Reasoning effort, for the CLIs that accept one. */
   aiEffort?: string
+  /**
+   * Models the user has actually used, per provider.
+   *
+   * Any list shipped with the editor is stale the week after it is written —
+   * vendors release models faster than releases go out, and being unable to
+   * pick one because Nova has not heard of it is a wall. What someone types
+   * once is offered from then on, so the suggestions track reality instead of
+   * whatever was true when this file was last edited.
+   */
+  aiRecentModels?: Partial<Record<AiProvider, string[]>>
   browserHome: string
   iconPack: 'nova' | 'classic' | 'minimal'
   /** Master switch for the built-in inspections. */
@@ -338,6 +348,7 @@ export const defaultSettings: Settings = {
   aiBaseUrls: {},
   aiFollowEdits: true,
   aiEffort: '',
+  aiRecentModels: {},
   browserHome: 'http://localhost:3000',
   iconPack: 'nova',
   inspectionsEnabled: true,
