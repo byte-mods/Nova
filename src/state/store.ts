@@ -282,6 +282,10 @@ export interface Settings {
   aiPermissionMode: 'default' | 'acceptEdits' | 'plan' | 'bypassPermissions'
   /** Per-provider endpoint overrides for the Anthropic-compatible vendors. */
   aiBaseUrls?: Partial<Record<AiProvider, string>>
+  /** Open files the assistant edits, so the change can be watched as it lands. */
+  aiFollowEdits?: boolean
+  /** Reasoning effort, for the CLIs that accept one. */
+  aiEffort?: string
   browserHome: string
   iconPack: 'nova' | 'classic' | 'minimal'
   /** Master switch for the built-in inspections. */
@@ -332,6 +336,8 @@ export const defaultSettings: Settings = {
   aiModel: '',
   aiPermissionMode: 'acceptEdits',
   aiBaseUrls: {},
+  aiFollowEdits: true,
+  aiEffort: '',
   browserHome: 'http://localhost:3000',
   iconPack: 'nova',
   inspectionsEnabled: true,
@@ -448,6 +454,14 @@ interface State {
   plans: Plan[]
   messages: AiMessage[]
   aiRunning: boolean
+  /**
+   * The run the console is currently waiting on.
+   *
+   * In the store rather than in a component ref because the console unmounts
+   * whenever it is toggled with ⌘I, and a ref lost at that moment left
+   * `aiRunning` stuck true with nothing able to clear it.
+   */
+  activeRunId: string | null
   aiSessionId: Record<AiProvider, string | undefined>
 
   paletteOpen: boolean
@@ -488,7 +502,20 @@ interface State {
 
   openFile: (
     path: string,
-    opts?: { preview?: boolean; line?: number; column?: number },
+    opts?: {
+      preview?: boolean
+      line?: number
+      column?: number
+      /**
+       * Open the tab without moving focus to it.
+       *
+       * For edits arriving from an agent: the file should appear so it can be
+       * watched, but taking the editor away from someone mid-read — five times
+       * in as many seconds during a multi-file turn — is worse than not showing
+       * it at all.
+       */
+      background?: boolean
+    },
   ) => Promise<void>
   openTab: (tab: Tab) => void
   closeTab: (id: string) => void
@@ -574,6 +601,9 @@ interface State {
   switchChat: (id: string) => Promise<void>
   deleteChat: (id: string) => Promise<void>
   persistChat: () => Promise<void>
+  schedulePersist: () => void
+  /** Pending debounced save, so a burst of tokens writes once. */
+  persistTimer: ReturnType<typeof setTimeout> | null
   setPlan: (plan: Plan | null) => void
   discardPlan: () => void
   patchPlan: (id: string, patch: (plan: Plan) => Plan) => void
@@ -672,8 +702,10 @@ export const useStore = create<State>((set, get) => ({
   activeChatId: null,
   plan: null,
   plans: [],
+  persistTimer: null,
   messages: [],
   aiRunning: false,
+  activeRunId: null,
   aiSessionId: noSessions(),
 
   paletteOpen: false,
@@ -777,6 +809,9 @@ export const useStore = create<State>((set, get) => ({
 
     const existing = get().tabs.find((t) => t.kind === 'file' && t.path === path)
     if (existing) {
+      // Already open: a background request has nothing left to do, since the
+      // file is on screen for the taking.
+      if (opts?.background) return
       // Must go through setActiveTab, or the tab's group never learns it is the
       // active one and the editor area renders nothing.
       get().setActiveTab(existing.id)
@@ -797,6 +832,7 @@ export const useStore = create<State>((set, get) => ({
       if (!buffer.binary) lspDidOpen(path, buffer.content)
     }
     const isDiagram = path.endsWith('.nova-diagram.json')
+    const previouslyActive = get().activeTabId
     get().openTab({
       id: `file:${path}`,
       kind: isDiagram ? 'diagram' : 'file',
@@ -804,7 +840,10 @@ export const useStore = create<State>((set, get) => ({
       path,
       preview: opts?.preview,
     })
-    if (opts?.line) setTimeout(reveal, 60)
+    // `openTab` activates what it opens, which is right for every other caller.
+    // Put the selection back for a background open.
+    if (opts?.background && previouslyActive) get().setActiveTab(previouslyActive)
+    if (opts?.line && !opts.background) setTimeout(reveal, 60)
   },
 
   openTab(tab) {
@@ -1559,6 +1598,7 @@ export const useStore = create<State>((set, get) => ({
 
   addMessage(message) {
     set({ messages: [...get().messages, message] })
+    get().schedulePersist()
   },
 
   patchMessage(id, patch) {
@@ -1961,6 +2001,28 @@ export const useStore = create<State>((set, get) => ({
    * The title is derived from the first user message the first time there is
    * one, so the list is browsable without asking the user to name anything.
    */
+  /**
+   * Saves the conversation shortly, coalescing bursts.
+   *
+   * Persistence used to happen only when a turn completed, which meant a run
+   * that never reported completion — a crashed CLI, a lost event — took the
+   * whole conversation with it, and the history list stayed empty however long
+   * the user had been working. Saving as messages arrive means the record
+   * survives whatever happens to the run. Debounced because a streaming turn
+   * patches its message on every token, and writing the file that often would
+   * be pointless work.
+   */
+  schedulePersist() {
+    const pending = get().persistTimer
+    if (pending) clearTimeout(pending)
+    set({
+      persistTimer: setTimeout(() => {
+        set({ persistTimer: null })
+        void get().persistChat()
+      }, 1200),
+    })
+  },
+
   async persistChat() {
     const { root, activeChatId, messages, plan, aiSessionId, chats } = get()
     if (!root || !activeChatId) return

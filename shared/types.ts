@@ -173,6 +173,12 @@ export interface AiStartRequest {
   attachments?: string[]
   permissionMode?: 'default' | 'acceptEdits' | 'plan' | 'bypassPermissions'
   /**
+   * Reasoning effort, for the CLIs that accept one. Ignored by the rest rather
+   * than approximated, since a dial that silently does nothing is worse than
+   * no dial.
+   */
+  effort?: string
+  /**
    * Overrides the endpoint for a vendor provider. Sent per run rather than read
    * from settings in the main process so a user correcting an address that has
    * moved takes effect on the next prompt, with no restart.

@@ -28,6 +28,7 @@ import PlanHistory from './PlanHistory'
 import { ChangeLine, CommandGroup } from './Activity'
 import { buildContextBlock } from '@/lib/aiContext'
 import { applyProgress, buildExecutePrompt, buildPlanPrompt, needsPlan, parsePlan } from '@/lib/planning'
+import { MODEL_TIERS, providerSpec } from '@shared/aiProviders'
 
 export default function AiConsole() {
   const width = useStore((s) => s.settings.aiWidth)
@@ -50,6 +51,7 @@ export default function AiConsole() {
   const [planningEnabled, setPlanningEnabled] = useState(true)
   const [showChats, setShowChats] = useState(false)
   const [showPlans, setShowPlans] = useState(false)
+  const [localModels, setLocalModels] = useState<string[]>([])
   /**
    * What the in-flight run is for, so its output can be routed on completion.
    * Refs, not state: the event subscription is created once and would close
@@ -61,6 +63,7 @@ export default function AiConsole() {
   const inputRef = useRef<HTMLTextAreaElement>(null)
 
   const provider = providers.find((p) => p.id === settings.aiProvider)
+  const spec = providerSpec(settings.aiProvider)
   const activeFile = tabs.find((t) => t.id === activeTabId)?.path
 
   useAiEvents(modeRef, requestRef)
@@ -69,6 +72,13 @@ export default function AiConsole() {
     const el = listRef.current
     if (el) el.scrollTop = el.scrollHeight
   }, [messages])
+
+  // OpenCode's models are whatever Ollama has pulled, which changes outside
+  // Nova — so they are asked for rather than remembered.
+  useEffect(() => {
+    if (settings.aiProvider !== 'opencode') return
+    void window.nova.ai.localModels().then(setLocalModels).catch(() => setLocalModels([]))
+  }, [settings.aiProvider])
 
   /**
    * Starts a run.
@@ -123,8 +133,10 @@ export default function AiConsole() {
       permissionMode: mode === 'plan' ? 'plan' : settings.aiPermissionMode,
       // Only meaningful for the vendor providers; ignored for the rest.
       baseUrl: settings.aiBaseUrls?.[settings.aiProvider],
+      effort: settings.aiEffort || undefined,
     })
     setRunId(id)
+    useStore.setState({ activeRunId: id })
     setAttachments([])
     store.patchMessage(assistantId, (m) => ({ ...m, runId: id }))
     // Tell the main process the message can now receive this run's events.
@@ -159,6 +171,10 @@ export default function AiConsole() {
 
   const stop = () => {
     if (runId) void window.nova.ai.cancel(runId)
+    // Release the console even if the process has already gone away. Cancel is
+    // best-effort; leaving the composer disabled because a `done` never came
+    // back is the failure this is here to prevent.
+    useStore.setState({ activeRunId: null, aiRunning: false })
   }
 
   const suggestions = useMemo(
@@ -182,10 +198,16 @@ export default function AiConsole() {
 
         <select
           className="select"
-          style={{ marginLeft: 'auto', maxWidth: 130 }}
+          style={{ marginLeft: 'auto', maxWidth: 120 }}
+          title="Which assistant runs this conversation"
           value={settings.aiProvider}
           onChange={(e) =>
-            useStore.getState().setSettings({ aiProvider: e.target.value as AiProvider })
+            // The model belongs to the provider, so a stale one must not
+            // survive the switch — asking Gemini for "opus" fails at the CLI.
+            useStore.getState().setSettings({
+              aiProvider: e.target.value as AiProvider,
+              aiModel: '',
+            })
           }
         >
           {providers.map((p) => (
@@ -225,6 +247,58 @@ export default function AiConsole() {
         >
           <Plus size={15} />
         </button>
+      </div>
+
+      {/*
+        Model and effort live below the header rather than in it.
+        The console is a side panel, and three dropdowns plus four icon buttons
+        on one line pushed the buttons off the edge and clipped the last select
+        — the same "present but unreachable" failure as a tab strip that
+        overflows. A second row costs 26 pixels and keeps everything legible at
+        the narrowest width the panel can be dragged to.
+      */}
+      <div className="ai-model-row">
+        <select
+          className="select"
+          style={{ maxWidth: 128 }}
+          title={
+            spec.models?.length || localModels.length
+              ? 'Which model, and how much thinking it does. Faster models answer sooner and cost less.'
+              : 'This assistant chooses its own model'
+          }
+          value={settings.aiModel}
+          onChange={(e) => useStore.getState().setSettings({ aiModel: e.target.value })}
+        >
+          <option value="">Default model</option>
+          {(spec.models ?? []).map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.label} · {MODEL_TIERS.find((t) => t.id === m.tier)?.label}
+            </option>
+          ))}
+          {localModels.map((m) => (
+            <option key={m} value={m}>
+              {m}
+            </option>
+          ))}
+        </select>
+
+        {spec.efforts && (
+          <select
+            className="select"
+            style={{ maxWidth: 96 }}
+            title="How long the model is allowed to reason before answering"
+            value={settings.aiEffort ?? ''}
+            onChange={(e) => useStore.getState().setSettings({ aiEffort: e.target.value })}
+          >
+            <option value="">Effort: auto</option>
+            {spec.efforts.map((level) => (
+              <option key={level} value={level}>
+                Effort: {level}
+              </option>
+            ))}
+          </select>
+        )}
+
       </div>
 
       {showPlans && (
@@ -641,6 +715,23 @@ function useAiEvents(
       // Events are buffered in the main process until `ai:ack`, by which point
       // the message already carries its runId — so an unmatched event belongs to
       // another consumer (an Explain run) and must not touch the conversation.
+      /*
+       * Release the composer first, before anything can decide not to handle
+       * this event.
+       *
+       * The message a run belongs to is not guaranteed to still be there when
+       * the run ends — switching chats replaces the whole list — and the
+       * `done` was previously dropped along with it, leaving `aiRunning` true
+       * for the rest of the session. Every prompt after that was silently
+       * discarded by the guard in `send`, which looks exactly like the
+       * assistant having stopped answering. Only this console's own run counts,
+       * so an Explain or Tutorial run finishing cannot release a chat turn that
+       * is still going.
+       */
+      if (event.type === 'done' && event.runId === store.activeRunId) {
+        useStore.setState({ activeRunId: null, aiRunning: false })
+      }
+
       const target = [...store.messages].reverse().find((m) => m.runId === event.runId)
       if (!target) return
       const id = target.id
@@ -712,6 +803,22 @@ function useAiEvents(
                 { path, additions, deletions, kind },
               ],
             })
+          }
+
+          /*
+           * Open what the agent just touched, so the developer watches the code
+           * change rather than reading a summary of it afterwards.
+           *
+           * Two deliberate limits. A deleted file is skipped — opening a tab on
+           * something that no longer exists is a broken tab. And the tab is
+           * opened in the background: stealing focus mid-turn would move the
+           * editor out from under someone who is reading, and a five-file edit
+           * would yank them through five files in as many seconds. The tab
+           * appears, the newest is revealed, and the choice of where to look
+           * stays with the person.
+           */
+          if (store.settings.aiFollowEdits !== false && event.change.kind !== 'delete') {
+            void store.openFile(event.change.path, { background: true })
           }
 
           void store.refreshGit()

@@ -275,6 +275,84 @@ check('and becomes usable', keyFlow.available === true, j(keyFlow.available))
 check('the key is never handed back to the renderer', !j(keyFlow).includes('test-key-not-real'), 'the value appeared in the reply')
 check('and it can be forgotten', !keyFlow.after.includes('deepseek'), j(keyFlow.after))
 
+console.log('\n-- the console always comes back --')
+
+/*
+ * The failure this guards against: a run whose completion never reaches the
+ * message it belonged to left `aiRunning` true for the rest of the session, and
+ * every prompt after that was silently dropped by the guard in `send`. From the
+ * outside the assistant had simply stopped answering, with no error and no way
+ * back short of restarting.
+ */
+const wedge = await cdp.evaluate(`
+  const s = (await import('/src/state/store.ts')).useStore
+  await s.getState().newChat()
+
+  // A run that ends after its message is gone — exactly what switching chats
+  // mid-turn produces.
+  s.getState().setAiRunning(true)
+  await new Promise((r) => setTimeout(r, 300))
+  const stuckBefore = s.getState().aiRunning
+
+  // Stop must release the console whether or not a process is still there.
+  const btns = [...document.querySelectorAll('.ai-composer button, .ai-console button')]
+  const stop = btns.find((b) => (b.textContent || '').includes('Stop'))
+  if (stop) stop.click()
+  await new Promise((r) => setTimeout(r, 500))
+  return { stuckBefore, runningAfterStop: s.getState().aiRunning, hadStop: Boolean(stop) }
+`, 60000)
+check('a run in flight marks the console busy', wedge.stuckBefore === true, j(wedge))
+check('and Stop always releases it', wedge.hadStop && wedge.runningAfterStop === false, j(wedge))
+
+// A completion for a run whose message no longer exists must still release it.
+const orphan = await cdp.evaluate(`
+  const s = (await import('/src/state/store.ts')).useStore
+  const { runId } = await window.nova.ai.start({
+    provider: 'gemini', prompt: 'x', cwd: ${j(PROJECT)},
+  })
+  // Exactly what the console records when it starts a turn.
+  s.setState({ aiRunning: true, activeRunId: runId })
+  await window.nova.ai.ack(runId)
+  // Throw the messages away, as switching chats does, before the run ends.
+  s.setState({ messages: [] })
+  await new Promise((r) => setTimeout(r, 2500))
+  return s.getState().aiRunning
+`, 60000)
+check(
+  'a run that ends after its message is gone still releases the console',
+  orphan === false,
+  `aiRunning=${orphan}`,
+)
+
+const recovered = await cdp.evaluate(`
+  const s = (await import('/src/state/store.ts')).useStore
+  return s.getState().aiRunning === false
+`)
+check('so a later prompt would not be silently dropped', recovered === true, j(recovered))
+
+console.log('\n-- a conversation survives without a clean finish --')
+
+const saved = await cdp.evaluate(`
+  const s = (await import('/src/state/store.ts')).useStore
+  await s.getState().newChat()
+  const id = s.getState().activeChatId
+  s.getState().addMessage({
+    id: 'u-persist', role: 'user',
+    parts: [{ kind: 'text', text: 'a question nobody answered' }],
+    changes: [], createdAt: Date.now(),
+  })
+  // No completion is ever reported for this turn.
+  await new Promise((r) => setTimeout(r, 2200))
+  const list = await window.nova.chats.list(s.getState().root)
+  const stored = await window.nova.chats.get(s.getState().root, id)
+  return {
+    listed: list.some((c) => c.id === id),
+    messages: (stored?.messages ?? []).length,
+  }
+`, 60000)
+check('an unfinished turn is still written to history', saved.listed === true, j(saved))
+check('with its messages', saved.messages >= 1, j(saved))
+
 console.log('\n-- each provider runs its own CLI --')
 
 /*

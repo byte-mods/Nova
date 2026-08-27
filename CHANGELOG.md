@@ -14,6 +14,60 @@ The steps for a release are in [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## 1.2.0
+
+### The console could wedge, and did
+
+A run whose completion never reached the message it belonged to left the console
+marked busy for the rest of the session. Every prompt after that was **silently
+discarded** by the guard in `send` — no error, no spinner, nothing to click. From
+the outside the assistant had simply stopped answering mid-task.
+
+Three separate causes, all fixed:
+
+- The event handler returned early when it could not find the message a run
+  belonged to, which threw the `done` away along with everything else. Switching
+  chats mid-turn was enough to trigger it. Completion now releases the console
+  before anything can decide not to handle the event.
+- The run being waited on was held in a component ref, which is lost whenever
+  the console is toggled with `⌘I`. It lives in the store now, which survives
+  remounts.
+- A `spawn` that failed outright emitted an error and never a completion, so the
+  renderer waited for something that was never coming. Every run now ends
+  exactly once, however it ends.
+- **Stop** always releases the console, whether or not the process is still
+  there. Cancelling is best-effort; being unable to type is not acceptable
+  either way.
+
+### Conversations are kept as they happen
+
+History was written only when a turn completed — so a wedged or crashed run took
+the whole conversation with it, and the history list stayed empty however long
+you had been working. Messages are now saved as they arrive, debounced.
+
+### Watch the code change
+
+Files the assistant edits **open in the editor as it works**, so the change can
+be watched rather than read about afterwards. Deliberately in the background:
+stealing focus mid-turn would move the editor out from under someone reading,
+and a five-file edit would drag them through five files in as many seconds.
+Deleted files are skipped. Turn it off with `aiFollowEdits`.
+
+### Models and effort
+
+- Each assistant now offers **its own models**, labelled by the trade being made
+  — Fast, Balanced, Deep. OpenCode lists whatever Ollama has pulled locally.
+- Codex gains a **reasoning-effort** control, which it accepts as a config
+  override. Only the CLIs that genuinely take one show it: a dial that silently
+  does nothing would be worse than no dial.
+- Switching provider clears the model, since asking Gemini for `opus` fails at
+  the CLI.
+- Model and effort sit in a row under the header. Putting three dropdowns in the
+  header pushed the icon buttons off the edge of a narrow panel — the same
+  present-but-unreachable failure as an overflowing tab strip.
+
+---
+
 ## 1.1.2
 
 - The README's opening paragraph still said the assistants were reached

@@ -377,6 +377,15 @@ export function registerAiHandlers(ctx: Ctx) {
 
     child.on('error', (err) => {
       emitFor(run, { type: 'error', runId, message: err.message })
+      // A spawn that fails outright never reaches `close`, so without this the
+      // renderer waits for a completion that is never coming and the composer
+      // stays disabled for the rest of the session. Every run must end exactly
+      // once, however it ends.
+      if (runs.has(runId)) {
+        emitFor(run, { type: 'done', runId, ok: false })
+        runs.delete(runId)
+        pending.delete(runId)
+      }
     })
 
     child.on('close', async (code) => {
@@ -404,9 +413,13 @@ export function registerAiHandlers(ctx: Ctx) {
               : `OpenCode failed with a local model. Available: ${models.join(', ')}. Check the model name in Settings › AI console.`,
         })
       }
-      emitFor(run, { type: 'done', runId, ok: code === 0 && !run.cancelled && !run.authFailed })
-      runs.delete(runId)
-      pending.delete(runId)
+      // `error` may already have ended this run; a second completion would
+      // release a composer that has since started something else.
+      if (runs.has(runId) || pending.has(runId)) {
+        emitFor(run, { type: 'done', runId, ok: code === 0 && !run.cancelled && !run.authFailed })
+        runs.delete(runId)
+        pending.delete(runId)
+      }
     })
 
     return { runId }
@@ -760,6 +773,8 @@ function buildClaudeArgs(req: AiStartRequest, prompt: string, mcpConfig: string 
 function buildCodexArgs(req: AiStartRequest, prompt: string, mcpArgs: string[]): string[] {
   const args = ['exec', '--json', '--skip-git-repo-check', '-C', req.cwd]
   if (req.model) args.push('-m', req.model)
+  // Codex expresses reasoning effort as a config override rather than a flag.
+  if (req.effort) args.push('-c', `model_reasoning_effort="${req.effort}"`)
   args.push(...mcpArgs)
 
   // `codex exec` takes a sandbox policy, not a permission mode. `plan` maps to

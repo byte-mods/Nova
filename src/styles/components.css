@@ -4798,3 +4798,21 @@
   color: var(--text-dim);
   white-space: pre-wrap;
 }
+
+/* ---- the AI console's model row ---- */
+
+.ai-model-row {
+  display: flex;
+  gap: 6px;
+  padding: 5px 10px 6px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.ai-model-row select {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  height: 24px;
+  padding: 0 22px 0 7px;
+}
