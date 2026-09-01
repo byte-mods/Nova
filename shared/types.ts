@@ -15,6 +15,17 @@ export interface FileReadResult {
   binary: boolean
   encoding: 'utf8' | 'base64'
   mtimeMs: number
+  /**
+   * True when the file was too large to load, so `content` is not the file.
+   *
+   * The distinction the editor has to make: `content` is not an editable
+   * representation of what is on disk, so a buffer carrying this must never be
+   * saved. Without it, an over-size file opened as a placeholder line of text
+   * and the first keystroke turned an 8 MB file into that one line.
+   */
+  truncated?: boolean
+  /** The real size on disk, so a file that was not loaded can say how big it is. */
+  size?: number
 }
 
 export type GitFileStatus =

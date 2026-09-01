@@ -621,7 +621,12 @@ const api = {
     dir: (): Promise<string> => ipcRenderer.invoke('plugins:dir'),
     install: (
       url: string,
-      options?: { ref?: string; permissions?: PluginPermission[]; force?: boolean },
+      options?: {
+        ref?: string
+        permissions?: PluginPermission[]
+        force?: boolean
+        allowBuild?: boolean
+      },
     ): Promise<InstalledPlugin> => ipcRenderer.invoke('plugins:install', url, options),
     update: (id: string): Promise<InstalledPlugin> => ipcRenderer.invoke('plugins:update', id),
     setEnabled: (id: string, enabled: boolean): Promise<InstalledPlugin | null> =>

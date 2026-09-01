@@ -23,6 +23,13 @@ import type {
   TableInfo,
 } from '../../shared/database'
 import { toolEnv, which } from '../lib/env'
+import {
+  readJsonFileOrQuarantine,
+  StoreReadError,
+  withFileLock,
+  writeFileAtomic,
+  writeJsonFile,
+} from '../lib/fileStore'
 
 const exec = promisify(execFile)
 
@@ -46,17 +53,12 @@ function secretsFile() {
 }
 
 async function readConnections(): Promise<DatabaseConnection[]> {
-  try {
-    const raw = JSON.parse(await fs.readFile(connectionsFile(), 'utf8'))
-    return Array.isArray(raw) ? raw : []
-  } catch {
-    return []
-  }
+  const raw = await readJsonFileOrQuarantine<unknown>(connectionsFile(), [])
+  return Array.isArray(raw) ? (raw as DatabaseConnection[]) : []
 }
 
 async function writeConnections(list: DatabaseConnection[]): Promise<void> {
-  await fs.mkdir(path.dirname(connectionsFile()), { recursive: true })
-  await fs.writeFile(connectionsFile(), JSON.stringify(list, null, 2), 'utf8')
+  await writeJsonFile(connectionsFile(), list)
 }
 
 /**
@@ -64,26 +66,45 @@ async function writeConnections(list: DatabaseConnection[]): Promise<void> {
  * keychain. When encryption is unavailable the password is simply not stored —
  * writing it in plaintext would be worse than making the user retype it.
  */
+/**
+ * Every stored password, or a thrown error.
+ *
+ * No file yet is genuinely "no passwords". A file that will not decrypt is not
+ * — the passwords are there and unreadable for now — and answering `{}` to both
+ * meant one locked keychain plus one save wiped every other connection's
+ * password along with it.
+ */
 async function readSecrets(): Promise<Record<string, string>> {
   if (!safeStorage.isEncryptionAvailable()) return {}
+  let buffer: Buffer
   try {
-    const buffer = await fs.readFile(secretsFile())
+    buffer = await fs.readFile(secretsFile())
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return {}
+    throw new StoreReadError(secretsFile(), err)
+  }
+  try {
     return JSON.parse(safeStorage.decryptString(buffer))
-  } catch {
-    return {}
+  } catch (err) {
+    throw new StoreReadError(secretsFile(), err)
   }
 }
 
 async function writeSecret(id: string, password: string | null): Promise<boolean> {
   if (!safeStorage.isEncryptionAvailable()) return false
-  const secrets = await readSecrets()
-  if (password === null) delete secrets[id]
-  else secrets[id] = password
-  const encrypted = safeStorage.encryptString(JSON.stringify(secrets))
-  await fs.mkdir(path.dirname(secretsFile()), { recursive: true })
-  await fs.writeFile(secretsFile(), encrypted)
-  await fs.chmod(secretsFile(), 0o600).catch(() => {})
-  return true
+  // Serialised so that saving two connections at once cannot have each read the
+  // same secrets and write back a copy missing the other's password.
+  return withFileLock(secretsFile(), async () => {
+    // Not caught: a store that will not decrypt must stop the write rather than
+    // be replaced by one that holds only the password being saved right now.
+    const secrets = await readSecrets()
+    if (password === null) delete secrets[id]
+    else secrets[id] = password
+    await writeFileAtomic(secretsFile(), safeStorage.encryptString(JSON.stringify(secrets)), {
+      mode: 0o600,
+    })
+    return true
+  })
 }
 
 export function registerDatabaseHandlers() {
@@ -110,6 +131,15 @@ export function registerDatabaseHandlers() {
   ipcMain.handle(
     'db:save',
     async (_e, connection: DatabaseConnection, password?: string | null): Promise<DatabaseConnection[]> => {
+      // Validated at the boundary: `db:save` used to accept anything, and a
+      // record with no `id` became an entry nothing could ever match or remove.
+      if (!connection || typeof connection !== 'object' || typeof connection.id !== 'string' || !connection.id) {
+        throw new Error('A database connection needs an id.')
+      }
+      if (typeof connection.kind !== 'string') {
+        throw new Error('A database connection needs a kind.')
+      }
+      return withFileLock(connectionsFile(), async () => {
       const list = await readConnections()
       const index = list.findIndex((c) => c.id === connection.id)
       const record: DatabaseConnection = { ...connection }
@@ -121,15 +151,18 @@ export function registerDatabaseHandlers() {
       else list[index] = record
       await writeConnections(list)
       return list
+      })
     },
   )
 
-  ipcMain.handle('db:remove', async (_e, id: string): Promise<DatabaseConnection[]> => {
-    const list = (await readConnections()).filter((c) => c.id !== id)
-    await writeSecret(id, null)
-    await writeConnections(list)
-    return list
-  })
+  ipcMain.handle('db:remove', async (_e, id: string): Promise<DatabaseConnection[]> =>
+    withFileLock(connectionsFile(), async () => {
+      const list = (await readConnections()).filter((c) => c.id !== id)
+      await writeSecret(id, null)
+      await writeConnections(list)
+      return list
+    }),
+  )
 
   ipcMain.handle('db:test', async (_e, id: string): Promise<{ ok: boolean; message: string }> => {
     const connection = (await readConnections()).find((c) => c.id === id)

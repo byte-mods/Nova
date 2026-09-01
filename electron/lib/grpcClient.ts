@@ -18,6 +18,7 @@ import { createRequire } from 'node:module'
 import * as grpc from '@grpc/grpc-js'
 import type * as pb from 'protobufjs'
 import type { GrpcMethod, GrpcServices } from '../../shared/http'
+import { isInside, PathEscapeError, resolveInRoot } from './workspacePath'
 
 const load = createRequire(import.meta.url)
 
@@ -64,10 +65,11 @@ export async function listServices(
   address: string,
   protoPath: string | undefined,
   baseDir: string,
+  projectRoot: string = baseDir,
 ): Promise<GrpcServices> {
   if (protoPath) {
     try {
-      const root = await loadProto(protoPath, baseDir)
+      const root = await loadProto(protoPath, baseDir, projectRoot)
       return { source: 'proto', methods: collectMethods(root) }
     } catch (err) {
       return { source: 'proto', methods: [], error: (err as Error).message }
@@ -86,18 +88,32 @@ export async function listServices(
   }
 }
 
-async function loadProto(protoPath: string, baseDir: string): Promise<pb.Root> {
-  const file = path.resolve(baseDir, protoPath)
+async function loadProto(protoPath: string, baseDir: string, projectRoot: string): Promise<pb.Root> {
+  const file = await resolveInRoot(projectRoot, protoPath, { base: baseDir }).catch((err) => {
+    if (err instanceof PathEscapeError) {
+      throw new Error(`The proto file ${protoPath} is outside the open project.`)
+    }
+    throw err
+  })
   try {
     await fs.access(file)
   } catch {
     throw new Error(`No such proto file: ${protoPath}`)
   }
+  const realRoot = await fs.realpath(projectRoot).catch(() => projectRoot)
   const root = new protobuf.Root()
   // Imports are resolved against the proto's own directory first, which is
   // what `protoc -I` would do and what an import of a sibling file expects.
-  root.resolvePath = (origin, target) =>
-    path.isAbsolute(target) ? target : path.resolve(origin ? path.dirname(origin) : path.dirname(file), target)
+  //
+  // An absolute `import` used to be honoured verbatim, which let a `.proto` in
+  // a cloned repository pull in any file on the machine. `resolvePath` is sync,
+  // so the containment test here is the string one; the entry file above went
+  // through the full `realpath` check already.
+  root.resolvePath = (origin, target) => {
+    const from = origin ? path.dirname(origin) : path.dirname(file)
+    const resolved = path.isAbsolute(target) ? target : path.resolve(from, target)
+    return isInside(realRoot, resolved) ? resolved : null
+  }
   await root.load(file, { keepCase: false })
   return root
 }
@@ -419,8 +435,11 @@ export async function callGrpc(
   metadata: Record<string, string>,
   timeoutMs: number,
   events: GrpcCallEvents,
+  projectRoot: string = baseDir,
 ): Promise<GrpcCallHandle> {
-  const root = protoPath ? await loadProto(protoPath, baseDir) : await loadByReflection(address)
+  const root = protoPath
+    ? await loadProto(protoPath, baseDir, projectRoot)
+    : await loadByReflection(address)
 
   const separator = methodPath.lastIndexOf('/')
   if (separator <= 0) {

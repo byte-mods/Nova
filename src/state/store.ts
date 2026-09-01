@@ -113,6 +113,18 @@ export interface Buffer {
   savedContent: string
   binary: boolean
   mtimeMs: number
+  /**
+   * The buffer holds a representation of the file, not the file.
+   *
+   * True for a file too large to load, and for one whose bytes are not text.
+   * Either way `content` cannot be written back, so the editor shows it rather
+   * than offering it for editing and `saveBuffer` refuses it outright.
+   */
+  readOnly?: boolean
+  /** Why it is read-only, for the banner the editor shows in its place. */
+  readOnlyReason?: 'too-large' | 'binary'
+  /** Size on disk, when the file was too large to load. */
+  size?: number
 }
 
 export type SidebarView =
@@ -638,7 +650,10 @@ interface State {
   toggleCoverageVisible: () => void
 
   refreshPlugins: () => Promise<void>
-  installPlugin: (url: string, options?: { ref?: string; permissions?: PluginPermission[]; force?: boolean }) => Promise<boolean>
+  installPlugin: (
+    url: string,
+    options?: { ref?: string; permissions?: PluginPermission[]; force?: boolean; allowBuild?: boolean },
+  ) => Promise<boolean>
   updatePluginById: (id: string) => Promise<void>
   setPluginEnabled: (id: string, enabled: boolean) => Promise<void>
   uninstallPlugin: (id: string) => Promise<void>
@@ -656,6 +671,9 @@ interface State {
 const nova = () => window.nova
 
 let toastTimer: ReturnType<typeof setTimeout> | undefined
+
+/** Longer than any suite worth waiting on, and finite, which is the point. */
+const COVERAGE_POLL_TIMEOUT_MS = 30 * 60_000
 
 export const useStore = create<State>((set, get) => ({
   ready: false,
@@ -838,9 +856,14 @@ export const useStore = create<State>((set, get) => ({
         savedContent: res.content,
         binary: res.binary,
         mtimeMs: res.mtimeMs,
+        readOnly: res.truncated || res.binary,
+        readOnlyReason: res.truncated ? 'too-large' : res.binary ? 'binary' : undefined,
+        size: res.size,
       }
       set({ buffers: { ...get().buffers, [path]: buffer } })
-      if (!buffer.binary) lspDidOpen(path, buffer.content)
+      // A language server is given documents it could act on. A file that was
+      // never loaded is not one — sending it would describe the file as empty.
+      if (!buffer.readOnly) lspDidOpen(path, buffer.content)
     }
     const isDiagram = path.endsWith('.nova-diagram.json')
     const previouslyActive = get().activeTabId
@@ -886,8 +909,23 @@ export const useStore = create<State>((set, get) => ({
     const group = closing.group ?? 'main'
     const next = tabs.filter((t) => t.id !== id)
     // Tell the server only when no other tab still shows the file.
-    if (closing.path && !next.some((t) => t.path === closing.path)) {
+    const lastTabForFile = Boolean(closing.path) && !next.some((t) => t.path === closing.path)
+    if (closing.path && lastTabForFile) {
       lspDidClose(closing.path)
+    }
+
+    // Closing a tab freed the tab and kept the file. Buffers were only ever
+    // added to, so a session that browsed a few hundred files held every one of
+    // them — the base64 of each image among them — until the window closed.
+    // A dirty buffer stays: that content exists nowhere else.
+    const buffers = get().buffers
+    let nextBuffers = buffers
+    if (closing.path && lastTabForFile) {
+      const buffer = buffers[closing.path]
+      if (buffer && buffer.content === buffer.savedContent) {
+        nextBuffers = { ...buffers }
+        delete nextBuffers[closing.path]
+      }
     }
 
     const nextGroupActive = { ...groupActive }
@@ -910,6 +948,7 @@ export const useStore = create<State>((set, get) => ({
       activeGroup,
       groupActive: nextGroupActive,
       activeTabId: nextGroupActive[activeGroup] ?? null,
+      buffers: nextBuffers,
     })
   },
 
@@ -1062,6 +1101,11 @@ export const useStore = create<State>((set, get) => ({
     const buffer = get().buffers[path]
     if (!buffer || buffer.content === buffer.savedContent) return
 
+    // The buffer never held the file, so writing it back would replace the file
+    // with the placeholder. Save-all reaches here too, which is how this used to
+    // destroy a file nobody had deliberately saved.
+    if (buffer.readOnly) return
+
     // Code style is applied on the way out, so what lands on disk matches the
     // project's settings even when the edit came from a paste or an agent.
     const { formatOnSave, optimizeImportsOnSave } = get().settings
@@ -1096,6 +1140,7 @@ export const useStore = create<State>((set, get) => ({
     const buffer = get().buffers[path]
     if (!buffer) return
     const res = await nova().fs.read(path)
+    const readOnly = Boolean(res.truncated || res.binary)
     set({
       buffers: {
         ...get().buffers,
@@ -1104,9 +1149,19 @@ export const useStore = create<State>((set, get) => ({
           content: res.content,
           savedContent: res.content,
           mtimeMs: res.mtimeMs,
+          binary: res.binary,
+          readOnly,
+          readOnlyReason: res.truncated ? 'too-large' : res.binary ? 'binary' : undefined,
+          size: res.size,
         },
       },
     })
+
+    // The language server still holds the version from before the reload. Every
+    // diagnostic, hover and completion after a branch switch was computed
+    // against content the file no longer had — off by however much the reload
+    // changed, and silently so.
+    if (!readOnly) lspDidChange(path, res.content)
   },
 
   setSidebarView(view) {
@@ -1512,13 +1567,24 @@ export const useStore = create<State>((set, get) => ({
     if (run) set({ testRun: { ...run, runId } })
     if (options?.coverage) {
       // Once the run lands, pick up whatever report it produced.
+      //
+      // Bounded, because the two exits below are both conditional on a state
+      // this poll does not control: a run that neither finishes nor is replaced
+      // — a wedged runner, a process that never reports — left this ticking for
+      // the life of the session, once per coverage run ever started.
+      const startedAt = Date.now()
       const poll = setInterval(() => {
         const state = get().testRun
-        if (state?.runId === runId && !state.running) {
+        if (state?.runId !== runId) {
+          clearInterval(poll)
+          return
+        }
+        if (!state.running) {
           clearInterval(poll)
           void get().loadCoverage()
+          return
         }
-        if (state?.runId !== runId) clearInterval(poll)
+        if (Date.now() - startedAt > COVERAGE_POLL_TIMEOUT_MS) clearInterval(poll)
       }, 800)
     }
   },
@@ -1852,6 +1918,13 @@ export const useStore = create<State>((set, get) => ({
       return
     }
     if (diskContent === buffer.content) return
+
+    // Disk matches what Nova last wrote, so whatever the watcher saw was Nova's
+    // own save coming back. Reporting that as somebody else's edit put a
+    // "changed on disk" bar over the file the user had just saved, and offered
+    // to reload their own content over their unsaved edits.
+    if (diskContent === buffer.savedContent) return
+
     set({
       externalChanges: {
         ...get().externalChanges,
@@ -2127,7 +2200,12 @@ export const useStore = create<State>((set, get) => ({
       return true
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
-      set({ pluginInstall: { url, stage: 'error', message } })
+      // An install that stopped to ask about the build command already
+      // broadcast that stage, and it carries the command the panel has to show.
+      // Overwriting it with a plain error would throw away the question.
+      if (get().pluginInstall?.stage !== 'needs-build-consent') {
+        set({ pluginInstall: { url, stage: 'error', message } })
+      }
       get().notify(message.split('\n')[0], 'error')
       return false
     }

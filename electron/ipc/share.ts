@@ -19,6 +19,7 @@ import type {
 } from '../../shared/share'
 import { startShareServer, type ShareServerHandle } from '../lib/shareServer'
 import { findCloudflared, openTunnel, TunnelError, type TunnelHandle } from '../lib/tunnel'
+import { onShutdown } from '../lib/shutdown'
 
 interface Ctx {
   broadcast: (channel: string, payload: unknown) => void
@@ -213,8 +214,10 @@ export function registerShareHandlers(ctx: Ctx) {
     server?.resetMedia(channel)
   })
 
-  // A share that outlives the window is a URL nobody is watching.
-  app.on('before-quit', () => void stop())
+  // A share that outlives the window is a URL nobody is watching — and this is
+  // a *public* URL, so the teardown is awaited rather than fired off into a
+  // process that is about to disappear.
+  onShutdown('share', stop)
 }
 
 async function stop() {

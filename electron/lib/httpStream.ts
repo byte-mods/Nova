@@ -117,21 +117,28 @@ export class StreamManager {
       for (const message of request.initialMessages) this.send(stream.status.streamId, message)
     })
 
+    let opened = false
+    socket.addEventListener('open', () => {
+      opened = true
+    })
+
     socket.addEventListener('message', (event: MessageEvent) => {
       stream.status.received++
       this.emit(stream, { direction: 'in', data: stringify(event.data) })
       this.events.onStatus({ ...stream.status })
     })
 
-    let opened = false
-    socket.addEventListener('open', () => {
-      opened = true
-    })
-
     socket.addEventListener('error', () => {
       // The browser error event carries no detail by design; the close event
       // that follows has the code worth reporting.
       this.emit(stream, { direction: 'system', data: 'Socket error' })
+
+      // `close` is what settles a failed connect — but nothing guarantees it
+      // arrives. A DNS failure or a refused TCP connect can raise `error` and
+      // stop there, and the run then waited on a promise nothing would ever
+      // resolve. Settling here too is safe: `fail` is idempotent, so the close
+      // event that usually follows finds the stream already finished.
+      if (!opened) this.fail(stream, `Could not connect to ${url}`)
     })
 
     socket.addEventListener('close', (event: CloseEvent) => {

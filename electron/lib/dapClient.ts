@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { EventEmitter } from 'node:events'
+import { ContentLengthFramer } from './rpcFraming'
 
 export interface DapMessage {
   seq: number
@@ -22,7 +23,7 @@ export interface DapMessage {
  */
 export class DapClient extends EventEmitter {
   private child: ChildProcessWithoutNullStreams | null = null
-  private buffer = Buffer.alloc(0)
+  private readonly framer = new ContentLengthFramer()
   private seq = 1
   private pending = new Map<
     number,
@@ -65,26 +66,19 @@ export class DapClient extends EventEmitter {
   }
 
   private consume(chunk: Buffer) {
-    this.buffer = Buffer.concat([this.buffer, chunk])
-    for (;;) {
-      const headerEnd = this.buffer.indexOf('\r\n\r\n')
-      if (headerEnd === -1) return
-      const header = this.buffer.subarray(0, headerEnd).toString('ascii')
-      const match = /content-length:\s*(\d+)/i.exec(header)
-      if (!match) {
-        this.buffer = this.buffer.subarray(headerEnd + 4)
-        continue
-      }
-      const length = Number(match[1])
-      const bodyStart = headerEnd + 4
-      if (this.buffer.length < bodyStart + length) return
-      const body = this.buffer.subarray(bodyStart, bodyStart + length).toString('utf8')
-      this.buffer = this.buffer.subarray(bodyStart + length)
+    const failure = this.framer.push(chunk, (body) => {
       try {
         this.dispatch(JSON.parse(body) as DapMessage)
       } catch {
         /* ignore malformed frames */
       }
+    })
+
+    // Unrecoverable: the stream is out of step, so nothing after this could be
+    // read at the right offset. Fail the session rather than buffer forever.
+    if (failure) {
+      this.framer.reset()
+      this.failAll(new Error(`the debug adapter sent an unusable message: ${failure.message}`))
     }
   }
 

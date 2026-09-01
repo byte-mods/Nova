@@ -4824,3 +4824,87 @@
   font-size: 11px;
   padding: 0 7px;
 }
+
+/* ============ files the editor does not open ============ */
+
+.unopenable {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  overflow: auto;
+}
+
+.unopenable-card {
+  max-width: 460px;
+  text-align: center;
+  color: var(--text-dim);
+}
+
+.unopenable-card h2 {
+  margin: 0 0 10px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  word-break: break-all;
+}
+
+.unopenable-card p {
+  margin: 0 0 8px;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.unopenable-path {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-faint);
+  word-break: break-all;
+}
+
+/* ============ plugin build consent ============ */
+
+.plugin-consent {
+  margin-top: 8px;
+  padding: 9px 10px 10px;
+  border: 1px solid var(--warning);
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+}
+
+.plugin-consent-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text);
+  line-height: 1.45;
+}
+
+.plugin-consent-head svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--warning);
+}
+
+.plugin-consent-cmd {
+  margin: 8px 0 6px;
+  padding: 7px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--hover);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--text);
+}
+
+.plugin-consent-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+  margin-top: 8px;
+}

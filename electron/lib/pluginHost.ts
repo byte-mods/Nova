@@ -23,6 +23,7 @@ import fs from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { resolveInRoot } from './workspacePath'
 import { promisify } from 'node:util'
 import type {
   InstalledPlugin,
@@ -319,11 +320,11 @@ export class PluginHost {
 
       case 'workspace.readFile':
         need('workspace:read')
-        return fs.readFile(this.resolveInWorkspace(root(), String(params.file)), 'utf8')
+        return fs.readFile(await this.resolveInWorkspace(root(), String(params.file)), 'utf8')
 
       case 'workspace.writeFile': {
         need('workspace:write')
-        const target = this.resolveInWorkspace(root(), String(params.file))
+        const target = await this.resolveInWorkspace(root(), String(params.file))
         await fs.mkdir(path.dirname(target), { recursive: true })
         await fs.writeFile(target, String(params.content ?? ''), 'utf8')
         this.ctx.broadcast('fs:changed', { path: target })
@@ -332,7 +333,7 @@ export class PluginHost {
 
       case 'workspace.list': {
         need('workspace:read')
-        const dir = this.resolveInWorkspace(root(), String(params.dir ?? '.'))
+        const dir = await this.resolveInWorkspace(root(), String(params.dir ?? '.'))
         const entries = await fs.readdir(dir, { withFileTypes: true })
         return entries.map((e) => ({
           name: e.name,
@@ -403,7 +404,7 @@ export class PluginHost {
         const command = String(params.command ?? '')
         if (!command.trim()) throw new Error('shell.exec needs a command.')
         const options = (params.options ?? {}) as { cwd?: string }
-        const cwd = options.cwd ? this.resolveInWorkspace(root(), options.cwd) : root()
+        const cwd = options.cwd ? await this.resolveInWorkspace(root(), options.cwd) : root()
         try {
           const { stdout, stderr } = await exec('/bin/sh', ['-lc', command], {
             cwd,
@@ -447,16 +448,12 @@ export class PluginHost {
   /**
    * Resolves a plugin-supplied path and refuses anything outside the project.
    *
-   * `path.resolve` collapses `..` before the check, so a traversal attempt fails
-   * here rather than reaching the filesystem.
+   * `path.resolve` collapses `..`, but a plugin granted `fs:read` could still
+   * point at a symlink and read the machine, so this goes through the shared
+   * `realpath` check rather than a string comparison.
    */
-  private resolveInWorkspace(root: string, relative: string): string {
-    const resolved = path.resolve(root, relative)
-    const rel = path.relative(root, resolved)
-    if (rel.startsWith('..') || path.isAbsolute(rel)) {
-      throw new Error(`Path "${relative}" is outside the open project.`)
-    }
-    return resolved
+  private async resolveInWorkspace(root: string, relative: string): Promise<string> {
+    return resolveInRoot(root, relative)
   }
 
   private storageFile(pluginId: string, kind: 'storage' | 'secrets' = 'storage'): string {

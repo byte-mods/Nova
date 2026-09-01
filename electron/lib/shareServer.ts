@@ -48,6 +48,7 @@ import {
   type SharePresence,
 } from '../../shared/share'
 import { isIgnoredPath, walk } from './scan'
+import { tryResolveInRoot } from './workspacePath'
 import { parseHttpFile } from './httpFile'
 
 /** Files never served, whatever else is being shared. */
@@ -55,6 +56,9 @@ const WITHHELD =
   /(?:^|[/\\])(?:\.env(?:\..*)?|\.npmrc|\.netrc|id_rsa|id_ed25519|.*\.pem|.*\.key|.*\.p12|.*\.pfx|.*\.keystore|credentials|\.aws|\.ssh)(?:$|[/\\])/i
 
 const MAX_FILE_BYTES = 512 * 1024
+
+/** More than a shared session has, and few enough that each still gets served. */
+const MAX_VIEWERS = 50
 const MAX_TREE_FILES = 4000
 
 /**
@@ -201,6 +205,24 @@ export async function startShareServer(options: ShareServerOptions): Promise<Sha
   }
 
   function stream(req: http.IncomingMessage, res: http.ServerResponse) {
+    // A share is a link the user sent to a handful of people, but it is on the
+    // public internet and the token is in the URL. Every viewer is a held-open
+    // connection and a copy of every broadcast, so without a ceiling one
+    // reshared link is enough to exhaust the process from outside.
+    if (viewers.size >= MAX_VIEWERS) {
+      res.writeHead(503, { 'Content-Type': 'text/plain', 'Retry-After': '30' })
+      res.end('This share already has as many viewers as it can carry.')
+      return
+    }
+
+    // A `HEAD` is not a viewer, and answering it with a stream opened one that
+    // nothing would ever close.
+    if (req.method === 'HEAD') {
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' })
+      res.end()
+      return
+    }
+
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache, no-transform',
@@ -423,9 +445,10 @@ function isEbmlHeader(chunk: Buffer): boolean {
  * Resolves a requested path and refuses anything outside the project or on the
  * withheld list.
  *
- * The containment check is done on the *resolved* path rather than on the
- * requested string: `..` can be encoded, doubled, or hidden behind a symlink,
- * and only resolution settles where a path actually points.
+ * The containment check runs on the *real* path rather than on the requested
+ * string: `..` can be encoded or doubled, which `path.resolve` handles, but it
+ * can also be a symlink, which only `realpath` does. Both are settled in
+ * `resolveInRoot` before anything here decides the file is safe to read.
  */
 export async function readShared(
   root: string,
@@ -434,11 +457,14 @@ export async function readShared(
 ): Promise<{ content: string } | { error: string; status: number }> {
   if (!requested) return { error: 'No path given.', status: 400 }
 
-  const resolved = path.resolve(root, requested)
-  const relative = path.relative(root, resolved)
-  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) {
-    return { error: 'Outside the shared project.', status: 403 }
-  }
+  // Resolved *and* realpathed: a symlink in the project pointing at `/` used to
+  // pass the string check and then serve the machine. Both the containment test
+  // and the withheld test below run against the real path for that reason.
+  const resolved = await tryResolveInRoot(root, requested)
+  if (!resolved) return { error: 'Outside the shared project.', status: 403 }
+  const realRoot = await fs.realpath(root).catch(() => root)
+  const relative = path.relative(realRoot, resolved)
+  if (!relative) return { error: 'Outside the shared project.', status: 403 }
   if (WITHHELD.test(relative)) {
     if (!excluded.includes(relative)) excluded.push(relative)
     return { error: 'This file is withheld from shares.', status: 403 }

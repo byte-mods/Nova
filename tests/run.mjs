@@ -54,6 +54,15 @@ const BUNDLES = [
   ['electron/lib/sast.ts', 'sast'],
   ['electron/lib/sastRules.ts', 'sastRules'],
   ['electron/lib/depAudit.ts', 'depAudit'],
+  // The boundary modules: paths that arrive from a repository, stores that
+  // hold the user's work, and the framing that reads a language server. Every
+  // one of these was untested, and every one of them had a bug.
+  ['electron/lib/workspacePath.ts', 'workspacePath'],
+  ['electron/lib/fileStore.ts', 'fileStore'],
+  ['electron/lib/rpcFraming.ts', 'rpcFraming'],
+  ['electron/lib/declarations.ts', 'declarations'],
+  ['electron/lib/env.ts', 'env'],
+  ['electron/lib/localHistory.ts', 'localHistory'],
   ['electron/lib/geminiStream.ts', 'geminiStream'],
   ['src/lib/fileIcons.tsx', 'fileIcons'],
 ]
@@ -74,6 +83,7 @@ const OFFLINE = [
   'test-apitest',
   'test-e2e',
   'test-security',
+  'test-hardening',
   'test-providers',
   'test-icons',
   'test-tools',

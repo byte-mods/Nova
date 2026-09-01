@@ -10,6 +10,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import type { HistoryEntry, HttpResponse } from '../../shared/http'
+import { writeFileAtomic } from './fileStore'
 
 /** Entries past this are dropped, oldest first, along with their bodies. */
 const MAX_ENTRIES = 200
@@ -95,8 +96,19 @@ export class HttpHistory {
     const task = (this.saving ?? Promise.resolve())
       .then(async () => {
         await fs.mkdir(this.dir, { recursive: true })
-        await fs.writeFile(this.bodyPath(entry.id), JSON.stringify(response))
-        await fs.writeFile(path.join(this.dir, 'index.json'), JSON.stringify(this.entries, null, 2))
+        // The bodies first, then the index. The index is what names them, so
+        // writing it last means a crash between the two leaves an orphaned body
+        // rather than an index pointing at one that is not there.
+        //
+        // Both go through a temporary file and a rename: a torn `index.json`
+        // used to read back as no history at all, and since every later write
+        // rebuilds the file from that reading, the whole list went with it —
+        // while the bodies stayed on disk forever, referenced by nothing.
+        await writeFileAtomic(this.bodyPath(entry.id), JSON.stringify(response))
+        await writeFileAtomic(
+          path.join(this.dir, 'index.json'),
+          `${JSON.stringify(this.entries, null, 2)}\n`,
+        )
         for (const old of dropped) {
           await fs.rm(this.bodyPath(old.id), { force: true }).catch(() => undefined)
         }

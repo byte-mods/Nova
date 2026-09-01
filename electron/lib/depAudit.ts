@@ -37,7 +37,26 @@ export interface Dependency {
  * pins exact versions — a manifest range cannot be matched against an advisory
  * without resolving it, and resolving it means running the package manager.
  */
+/**
+ * Every dependency the project pins, and the lockfiles that could not be read.
+ *
+ * The two travel together because reporting the first without the second is
+ * what made a malformed `package-lock.json` look like a project with no
+ * dependencies, and therefore no vulnerabilities.
+ */
+export async function readDependenciesDetailed(
+  root: string,
+): Promise<{ dependencies: Dependency[]; unreadable: string[] }> {
+  const unreadable: string[] = []
+  const dependencies = await collect(root, unreadable)
+  return { dependencies, unreadable }
+}
+
 export async function readDependencies(root: string): Promise<Dependency[]> {
+  return (await readDependenciesDetailed(root)).dependencies
+}
+
+async function collect(root: string, unreadable: string[]): Promise<Dependency[]> {
   const found: Dependency[] = []
 
   for (const [file, parse] of [
@@ -51,12 +70,22 @@ export async function readDependencies(root: string): Promise<Dependency[]> {
     ['Gemfile.lock', parseGemfileLock],
     ['composer.lock', parseComposerLock],
   ] as const) {
+    let text: string
     try {
-      const text = await fs.readFile(path.join(root, file), 'utf8')
-      found.push(...parse(text, file))
-    } catch {
-      // not present, which is the normal case for most of them
+      text = await fs.readFile(path.join(root, file), 'utf8')
+    } catch (err) {
+      // Not present is the normal case for most of them. Present but
+      // unreadable is not, and must not be silently the same thing.
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') unreadable.push(file)
+      continue
     }
+
+    const before = found.length
+    found.push(...parse(text, file))
+    // A lockfile that exists and yields nothing did not parse. Left silent,
+    // this is how a scanner reports a project as clean without having checked
+    // a single one of its dependencies — the worst answer it could give.
+    if (found.length === before && text.trim()) unreadable.push(file)
   }
 
   // The same package can appear at several versions in one tree; each version

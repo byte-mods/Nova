@@ -17,6 +17,7 @@ import { buildOpencodeArgs, ollamaModels, translateOpencodeEvent } from '../lib/
 import { buildGeminiArgs, translateGeminiEvent } from '../lib/geminiStream'
 import { AI_PROVIDERS, keyedProviders, providerSpec } from '../../shared/aiProviders'
 import { readAiKey, storedAiKeys, writeAiKey } from '../lib/aiCredentials'
+import { which } from '../lib/env'
 
 const exec = promisify(execFile)
 
@@ -64,17 +65,6 @@ function providerEnv(spec: { keyEnv?: string }, key: string): NodeJS.ProcessEnv 
   const env = enrichedEnv()
   if (!spec.keyEnv || !key) return env
   return { ...env, [spec.keyEnv]: key }
-}
-
-async function which(binary: string): Promise<string> {
-  try {
-    const { stdout } = await exec('/bin/sh', ['-lc', `command -v ${binary}`], {
-      env: enrichedEnv(),
-    })
-    return stdout.trim().split('\n')[0] ?? ''
-  } catch {
-    return ''
-  }
 }
 
 async function version(binary: string): Promise<string> {

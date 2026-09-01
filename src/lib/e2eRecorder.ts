@@ -14,8 +14,24 @@
  */
 import type { Locator, LocatorKind } from '@shared/e2e'
 
-/** The prefix a recorder message carries, and the host looks for. */
+/**
+ * The fixed part of the prefix a recorder message carries.
+ *
+ * The full channel is this plus a token generated for each injection — see
+ * `recorderSource`. A page can write anything it likes to `console.log`, and
+ * with a constant prefix that meant any page could forge recorded actions into
+ * the test being recorded from it. The token does not make the channel secret
+ * from a determined page, but it does mean a page cannot forge an action
+ * without having been on screen, recording, and reading its own console.
+ */
 export const CHANNEL = '__nova_e2e__'
+
+/** A per-injection channel, so the prefix is not the same on every page. */
+export function newChannelToken(): string {
+  const bytes = new Uint8Array(9)
+  crypto.getRandomValues(bytes)
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+}
 
 /**
  * Durability order, best first.
@@ -69,9 +85,9 @@ function rank(locator: Locator): number {
  * It is idempotent: re-injecting on every navigation is the only way to
  * survive a page load, so it removes its own listeners first.
  */
-export const RECORDER_SOURCE = String.raw`
+const RECORDER_TEMPLATE = String.raw`
 (() => {
-  const CHANNEL = '${CHANNEL}'
+  const CHANNEL = '__NOVA_CHANNEL__'
   const previous = window.__novaE2E
   if (previous) previous.teardown()
 
@@ -373,12 +389,23 @@ export const RECORDER_SOURCE = String.raw`
  * Reads one recorder message. Returns null for anything that is not ours, so
  * the host can hand it every console line the page produces.
  */
-export function parseMessage(line: string): Record<string, unknown> | null {
-  const at = line.indexOf(CHANNEL)
+export function parseMessage(line: string, channel: string = CHANNEL): Record<string, unknown> | null {
+  const at = line.indexOf(channel)
   if (at === -1) return null
   try {
-    return JSON.parse(line.slice(at + CHANNEL.length))
+    return JSON.parse(line.slice(at + channel.length))
   } catch {
     return null
   }
 }
+
+/** The recorder script, bound to one channel. */
+export function recorderSource(channel: string): string {
+  return RECORDER_TEMPLATE.replace('__NOVA_CHANNEL__', channel)
+}
+
+/**
+ * The script with the plain channel, for tests and for callers that do not
+ * hold a token of their own.
+ */
+export const RECORDER_SOURCE = recorderSource(CHANNEL)

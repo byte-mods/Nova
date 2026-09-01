@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { EventEmitter } from 'node:events'
+import { ContentLengthFramer } from './rpcFraming'
 
 export interface RpcMessage {
   jsonrpc: '2.0'
@@ -27,9 +28,18 @@ type PendingRequest = {
  */
 export class LspClient extends EventEmitter {
   private child: ChildProcessWithoutNullStreams | null = null
-  private buffer = Buffer.alloc(0)
+  private readonly framer = new ContentLengthFramer()
   private nextId = 1
-  private pending = new Map<number, PendingRequest>()
+  /**
+   * Keyed by the id as text.
+   *
+   * Nova only ever sends numeric ids, but JSON-RPC allows a string, and a
+   * server is free to echo `"1"` for the request Nova sent as `1`. The map was
+   * keyed by number, so a string id never matched anything, the response was
+   * dropped, and the request sat there until its timeout — every request, on a
+   * server that happens to quote its ids.
+   */
+  private pending = new Map<string, PendingRequest>()
   private stopped = false
 
   constructor(
@@ -70,36 +80,32 @@ export class LspClient extends EventEmitter {
 
   /** Frames and parses the `Content-Length` stream. */
   private consume(chunk: Buffer) {
-    this.buffer = Buffer.concat([this.buffer, chunk])
-    for (;;) {
-      const headerEnd = this.buffer.indexOf('\r\n\r\n')
-      if (headerEnd === -1) return
-      const header = this.buffer.subarray(0, headerEnd).toString('ascii')
-      const match = /content-length:\s*(\d+)/i.exec(header)
-      if (!match) {
-        // Unparseable header; drop it rather than stalling forever.
-        this.buffer = this.buffer.subarray(headerEnd + 4)
-        continue
-      }
-      const length = Number(match[1])
-      const bodyStart = headerEnd + 4
-      if (this.buffer.length < bodyStart + length) return
-      const body = this.buffer.subarray(bodyStart, bodyStart + length).toString('utf8')
-      this.buffer = this.buffer.subarray(bodyStart + length)
+    const failure = this.framer.push(chunk, (body) => {
       try {
         this.dispatch(JSON.parse(body) as RpcMessage)
       } catch {
         /* a malformed payload must not kill the connection */
       }
+    })
+
+    // A frame this connection cannot recover from — the stream is out of step,
+    // so every later message would be garbage read at the wrong offset. Ending
+    // it and saying why beats growing until the process dies.
+    if (failure) {
+      this.framer.reset()
+      this.emit('stderr', `${this.id}: ${failure.message}\n`)
+      this.failAll(new Error(`${this.id} sent an unusable message: ${failure.message}`))
+      void this.stop()
     }
   }
 
   private dispatch(message: RpcMessage) {
     // Response to one of our requests.
     if (message.id !== undefined && message.method === undefined) {
-      const pending = this.pending.get(message.id as number)
+      const key = String(message.id)
+      const pending = this.pending.get(key)
       if (!pending) return
-      this.pending.delete(message.id as number)
+      this.pending.delete(key)
       clearTimeout(pending.timer)
       if (message.error) pending.reject(new Error(message.error.message))
       else pending.resolve(message.result)
@@ -131,10 +137,10 @@ export class LspClient extends EventEmitter {
     const id = this.nextId++
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
-        this.pending.delete(id)
+        this.pending.delete(String(id))
         reject(new Error(`${this.id}: ${method} timed out`))
       }, timeoutMs)
-      this.pending.set(id, {
+      this.pending.set(String(id), {
         resolve: resolve as (value: unknown) => void,
         reject,
         timer,

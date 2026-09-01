@@ -13,6 +13,7 @@ import TutorialView from './TutorialView'
 import HttpView from './HttpView'
 import DatabaseView from './DatabaseView'
 import ExternalChangeBar from './ExternalChangeBar'
+import UnopenableView from './UnopenableView'
 import MergeView from './MergeView'
 import LineHistoryView from './LineHistoryView'
 import ScratchView from './ScratchView'
@@ -84,6 +85,9 @@ function renderTab(tab: ReturnType<typeof useStore.getState>['tabs'][number]) {
     case 'file': {
       const path = tab.path!
       if (isImage(path)) return <ImageView path={path} />
+      // A buffer that is not the file never reaches an editing surface — not
+      // the code editor, and not the markdown one, which can also write back.
+      if (useStore.getState().buffers[path]?.readOnly) return <UnopenableView path={path} />
       return (
         <>
           <ExternalChangeBar path={path} />

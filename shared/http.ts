@@ -113,6 +113,13 @@ export interface RedirectHop {
   status: number
   from: string
   to: string
+  /**
+   * Set when the hop crossed to another origin and credentials were dropped.
+   *
+   * Worth surfacing rather than doing quietly: a request that suddenly 401s
+   * after a redirect is otherwise a mystery, and the answer is right here.
+   */
+  strippedCredentials?: string[]
 }
 
 export interface HttpResponse {

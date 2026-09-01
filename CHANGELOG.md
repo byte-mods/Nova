@@ -14,6 +14,165 @@ The steps for a release are in [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## 1.2.2
+
+### An audit, and the twenty-nine things it found
+
+A correctness and security review of the whole tree found 29 defects and 26
+gaps, almost all of them in the parts of the codebase that had no tests: the
+share server, the plugin installer, the HTTP client, the symbol indexer, and
+every store that reads a file, changes it, and writes it back.
+
+The pattern behind most of them was the same. A module's doc comment stated a
+guarantee, and the code one screen below did not implement it. Three files
+claimed path containment they did not provide; one said a share must never
+outlive the window and then discarded the promise that would have stopped it;
+one said snapshots "collapse into the previous one" and then dropped them.
+
+#### Code from a repository could reach the machine
+
+- **A `.http` file's script block escaped the `vm` sandbox.** The context was
+  built by handing the script this realm's `Object`, `Array`, `JSON` and
+  friends — and `Object.constructor` is the host `Function`, so calling it
+  compiled code in the main process, next to `safeStorage` and the decrypted
+  API keys. Nothing from the host realm crosses the boundary now: the whole
+  `nova` API is compiled inside the context, data goes in as a JSON literal and
+  comes back as a JSON string, and the context is built from a null-prototype
+  object so `globalThis.constructor` has nothing to find either. 28 escape
+  vectors are tested, including the six that used to work.
+- **A `.http` file could read any file on the machine** and post it to a server
+  it named, through `@data`, `< ./body`, or a multipart upload. Paths from a
+  repository now resolve through one shared check.
+- **The share server's containment check ignored symlinks** — the one case its
+  own comment promised to handle. `ln -s / link` inside a shared project served
+  the machine. The plugin host had the identical hole, and `.proto` imports and
+  coverage reports were two more ways to name a path outside the project.
+  All five go through `resolveInRoot`, which resolves the root *and* the target
+  with `realpath` before comparing them.
+- **`Authorization` was replayed to whatever host a redirect named.** Nova
+  follows redirects itself, so the browser rule that would have applied had to
+  be applied here: credentials are dropped when a hop crosses origin, and the
+  hop records that it happened. Headers an API-key scheme set are dropped too,
+  whatever the user called them.
+- **A plugin's build command ran before the user approved anything.** Installing
+  a plugin is running its code, and that is where it starts. The install now
+  stops before the build, shows the command verbatim, and asks — before the
+  clone is promoted, so refusing leaves nothing installed.
+
+#### Losing the user's work
+
+- **One unreadable keychain entry wiped every stored API key**, and every stored
+  database password. "No file yet" and "the file will not decrypt" were both
+  answered with `{}`, and the write that followed made that `{}` permanent. They
+  are different events now, and the second one stops the write.
+- **A single unparseable byte deleted a whole file on the next save** — chats,
+  run configurations, the plugin registry, recents, settings. A damaged file is
+  moved aside as `<name>.corrupt` rather than read as empty.
+- **Concurrent saves lost each other and reported success.** Seven stores read,
+  modified and wrote with no lock between them. Every store now serialises
+  read-modify-write per file; 25 concurrent writers all survive in the tests.
+- **Every whole-file write is atomic** — a temporary file and a rename, so a
+  crash halfway through leaves the old contents rather than a truncated file
+  that the next read cannot parse.
+- **Opening a file over 8 MB and typing one character truncated it** to a
+  placeholder comment. The placeholder was editable text, and saving it wrote
+  that one line over the file. Files that were not loaded, and files that are
+  not text, now open as a panel that says so and cannot be saved.
+- **Non-image binaries opened as editable base64** and skipped the size limit
+  entirely, so a 2 GB archive was read whole and encoded on the way to an editor
+  that could not show it.
+- **The recovery net had two holes**, and they lined up with the losses above: a
+  snapshot was skipped for large files — exactly the case worth keeping — and
+  "coalescing" dropped the newer snapshot instead of replacing the older one.
+- **`git checkout <branch>` ran without `--`**, so a stale branch name was
+  resolved as a pathspec and discarded that file's uncommitted changes.
+
+#### Freezing, exhausting, or hanging
+
+- **A language server could exhaust the app's memory** by announcing a message
+  it never sent, and framing was quadratic besides — a 64 MB reply spent seconds
+  copying itself. Both clients share one bounded framer now; the same reply
+  assembles in 45 ms.
+- **A visual-regression baseline could be a decompression bomb.** A 74-byte PNG
+  claiming 65535 × 65535 got as far as a 17 GB allocation. Dimensions are
+  checked before anything is allocated, `inflate` is given a ceiling, and the
+  inflated size has to match what the header implied.
+- **Quitting during a share left the tunnel running** and the project readable
+  from the internet. `before-quit` fired the teardown into a process that was
+  already exiting. Quitting is now two-step: cancel, await every teardown, exit.
+- **Opening a project with a minified file** ran the declaration patterns over a
+  line hundreds of kilobytes long. Those patterns are ambiguous enough that this
+  is not somewhere to be relaxed, so lines over 2 KB are no longer scanned — no
+  language writes a declaration on one.
+- **A failed WebSocket connect could settle only via `close`**, which is not
+  guaranteed to arrive; it settles on `error` too.
+- **A server using string request ids** — which the JSON-RPC spec allows — made
+  every request hang until its timeout, because the pending map was keyed by
+  number.
+- **The coverage poll could run for the life of the session** when a run neither
+  finished nor was replaced.
+- **Closing a tab never freed the file.** Buffers were only ever added to, so a
+  session that browsed a few hundred files held all of them, base64 included.
+
+#### Wrong, quietly
+
+- **A malformed lockfile made the vulnerability scanner report "clean".** The
+  parse failure was indistinguishable from having no dependencies, which is the
+  worst answer a scanner can give. Unreadable lockfiles are now named in the
+  report.
+- **API keys in a custom header were written to disk unredacted.** Redaction
+  went by a fixed list of header names, and an API-key scheme puts its secret in
+  a header the *user* named. Redaction now follows provenance — the code that
+  set the header says it is a credential — with the name list as a fallback. Key
+  in a query string is redacted too.
+- **Nova could not open or search two of its own source files**, which had literal
+  NUL bytes written into them where the escape was meant.
+- **Nova's own saves came back as somebody else's edits**, putting a "changed on
+  disk" bar over the file the user had just saved.
+- **Reloading a changed file never told the language server**, so every
+  diagnostic after a branch switch was computed against content the file no
+  longer had.
+- **On Windows, nothing that runs an external tool could find one.** `which()`
+  never tried `PATHEXT`, so `node` never matched `node.exe`, and the fallback
+  shelled out to `/bin/sh`. There were two copies of it; now there is one, it
+  has a Windows path, and it no longer interpolates a name into a shell string.
+- **The tunnel URL was matched against a single stdout chunk** rather than the
+  accumulated output, so a chunk boundary inside cloudflared's banner meant a
+  working tunnel was reported as a failure.
+- **Any page in the browser pane could inject actions into an E2E recording.**
+  The channel is per-injection now, and nothing is accepted unless a recording
+  is actually in progress.
+- **The main window had no `will-navigate` guard**, so a navigation could load a
+  remote page into the renderer that owns the IPC bridge.
+- **The share server had no viewer cap**, and answered `HEAD` by opening a
+  stream that nothing would close.
+
+### Tests
+
+The security-critical modules were exactly the untested ones. Six of them are
+now bundled for the suite, and a new `test-hardening` suite adds **56 checks**
+over the boundaries: path containment including symlink escape, stores under 25
+concurrent writers, the script sandbox against every escape that used to work,
+credential stripping across a redirect, redaction by provenance, bounded and
+linear RPC framing, and a PNG decoder that refuses a bomb.
+
+`npm run test:offline` is **872 checks**, up from 816. The README's counts had
+drifted and are corrected.
+
+### Not fixed
+
+- The `.http` sandbox is a **realm** boundary, not a process one. It closes
+  every escape found, but a separate process — the one the plugin host already
+  runs in — remains the stronger answer.
+- The catastrophic backtracking reported in the symbol indexer **could not be
+  reproduced**; the 2 KB line cap is a guard rather than a confirmed fix.
+- The renderer CSP still allows `unsafe-inline` and `unsafe-eval`; there is
+  still no workspace-trust model; IPC argument validation was added where it
+  destroyed state, not across all 249 channels; and the accessibility and
+  Unicode-detection gaps are untouched.
+
+---
+
 ## 1.2.1
 
 ### Current models, and a list that cannot go stale again

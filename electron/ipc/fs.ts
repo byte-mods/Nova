@@ -58,15 +58,25 @@ export function registerFsHandlers(ctx: Ctx) {
   ipcMain.handle('fs:read', async (_e, file: string): Promise<FileReadResult> => {
     const stat = await fs.stat(file)
     const ext = path.extname(file).toLowerCase()
-    if (stat.size > MAX_TEXT_BYTES && !BINARY_EXT.has(ext)) {
+
+    // The size limit comes first, before the extension is consulted. It used to
+    // be skipped for known-binary extensions, so a 2 GB archive was read whole
+    // and base64-encoded — several times its size in memory — on the way to an
+    // editor that could not have shown it anyway.
+    if (stat.size > MAX_TEXT_BYTES) {
       return {
         path: file,
-        content: `// File is ${(stat.size / 1024 / 1024).toFixed(1)} MB — too large to open in the editor.`,
-        binary: false,
+        // Deliberately empty rather than a placeholder line. A placeholder is
+        // editable text, and saving it wrote that one line over the whole file.
+        content: '',
+        binary: BINARY_EXT.has(ext),
         encoding: 'utf8',
         mtimeMs: stat.mtimeMs,
+        truncated: true,
+        size: stat.size,
       }
     }
+
     const buf = await fs.readFile(file)
     if (BINARY_EXT.has(ext) || looksBinary(buf)) {
       const mime = MIME[ext] ?? 'application/octet-stream'

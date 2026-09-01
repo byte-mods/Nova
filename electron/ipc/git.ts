@@ -278,7 +278,14 @@ export function registerGitHandlers() {
   })
 
   ipcMain.handle('git:checkout', async (_e, cwd: string, branch: string, create?: boolean) => {
-    await gitSafe(cwd, create ? ['checkout', '-b', branch] : ['checkout', branch])
+    // The `--` matters: without it git resolves the argument as a *pathspec*
+    // when no such branch exists, and `git checkout somefile` discards that
+    // file's uncommitted changes. A branch list that has gone stale is enough
+    // to turn a checkout into silent data loss.
+    //
+    // `-b` takes a branch name by definition, so the separator only belongs on
+    // the switching form.
+    await gitSafe(cwd, create ? ['checkout', '-b', branch] : ['checkout', branch, '--'])
   })
 
   ipcMain.handle('git:init', async (_e, cwd: string) => {

@@ -140,7 +140,20 @@ export interface InstalledPlugin {
 /** Progress emitted while installing, so the UI can show a live log. */
 export interface PluginInstallProgress {
   url: string
-  stage: 'cloning' | 'validating' | 'building' | 'loading' | 'done' | 'error'
+  stage:
+    | 'cloning'
+    | 'validating'
+    /**
+     * Stopped before running the manifest's build command, which is arbitrary
+     * shell from the repository. The user has to see it and agree to it.
+     */
+    | 'needs-build-consent'
+    | 'building'
+    | 'loading'
+    | 'done'
+    | 'error'
+  /** The build command, when `stage` is `needs-build-consent`. */
+  buildCommand?: string
   message: string
   pluginId?: string
 }

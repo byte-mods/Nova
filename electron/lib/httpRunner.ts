@@ -28,6 +28,7 @@ import { interpolateRequest, parseHttpFile } from './httpFile'
 import { sendHttpRequest, type SendContext } from './httpClient'
 import { runPostScript, runPreScript } from './httpScript'
 import { errorsFromBody } from './graphql'
+import { PathEscapeError, resolveInRoot } from './workspacePath'
 import { checkContract, loadSpec, type Spec } from './openapi'
 
 export interface RunOptions {
@@ -96,7 +97,7 @@ export async function runHttpFile(file: string, options: RunOptions): Promise<Ru
       continue
     }
 
-    const rows = await loadDataRows(request, baseDir)
+    const rows = await loadDataRows(request, baseDir, options.context.projectRoot ?? baseDir)
 
     for (const [index, row] of rows.entries()) {
       const step = await runOnce(request, {
@@ -297,10 +298,21 @@ async function specValidator(
 async function loadDataRows(
   request: HttpRequest,
   baseDir: string,
+  projectRoot: string,
 ): Promise<Record<string, string>[]> {
   if (!request.dataPath) return [{}]
 
-  const file = path.resolve(baseDir, request.dataPath)
+  // `# @data` names a fixture next to the file, so it resolves against the
+  // file's directory — but a cloned repository is untrusted input, and without
+  // this check `@data /etc/passwd` read it and the request body posted it.
+  let file: string
+  try {
+    file = await resolveInRoot(projectRoot, request.dataPath, { base: baseDir })
+  } catch (err) {
+    if (!(err instanceof PathEscapeError)) throw err
+    return [{ __dataError: `${request.dataPath} is outside the open project.` }]
+  }
+
   let text: string
   try {
     text = await fs.readFile(file, 'utf8')

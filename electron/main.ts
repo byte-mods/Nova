@@ -18,6 +18,7 @@ import { registerSecurityHandlers } from './ipc/security'
 import { registerShareHandlers } from './ipc/share'
 import { registerDeviceHandlers } from './ipc/devices'
 import { registerBuildHandlers } from './ipc/build'
+import { installShutdownHandler, onShutdown } from './lib/shutdown'
 import { registerStructuralHandlers } from './ipc/structural'
 import { registerDatabaseHandlers } from './ipc/database'
 import { registerProfileHandlers } from './ipc/profile'
@@ -64,6 +65,26 @@ const RENDERER_DIST = path.join(process.env.APP_ROOT, 'dist')
 const ICON_PNG = path.join(process.env.APP_ROOT, 'build', 'icon.png')
 
 let mainWindow: BrowserWindow | null = null
+
+/**
+ * Whether a navigation stays where the app already is.
+ *
+ * `file:` URLs have a null origin, so the packaged build compares the directory
+ * the app was loaded from instead — otherwise every in-app navigation would
+ * look cross-origin and be refused.
+ */
+function sameOrigin(next: string, current: string): boolean {
+  try {
+    const a = new URL(next)
+    const b = new URL(current)
+    if (a.protocol === 'file:' && b.protocol === 'file:') {
+      return path.dirname(a.pathname).startsWith(path.dirname(b.pathname))
+    }
+    return a.origin === b.origin
+  } catch {
+    return false
+  }
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -117,6 +138,19 @@ function createWindow() {
     return { action: 'deny' }
   })
 
+  // The main window is the privileged one: it holds the preload bridge and
+  // every IPC channel behind it. `setWindowOpenHandler` covered new windows but
+  // nothing covered navigating this one — a `window.location` assignment from a
+  // dependency, or a dragged link, would have loaded a remote page into the
+  // renderer that owns that bridge. Navigation away from the app's own origin
+  // is refused and handed to the OS browser, where it belongs.
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    const current = mainWindow?.webContents.getURL() ?? ''
+    if (sameOrigin(url, current)) return
+    event.preventDefault()
+    if (/^https?:/i.test(url)) void shell.openExternal(url)
+  })
+
   mainWindow.webContents.on('will-attach-webview', (_event, webPreferences) => {
     // Guest pages must never get Node access.
     delete (webPreferences as { preload?: string }).preload
@@ -153,6 +187,10 @@ function broadcast(channel: string, payload: unknown) {
 app.whenReady().then(() => {
   nativeTheme.themeSource = 'dark'
 
+  // Registered before anything that registers a teardown, so the first
+  // `before-quit` is already the coordinated one.
+  installShutdownHandler()
+
   // A packaged app gets its dock icon from the bundle; running from source it
   // is Electron's until we set it explicitly.
   if (process.platform === 'darwin' && !app.isPackaged) {
@@ -167,11 +205,9 @@ app.whenReady().then(() => {
   const lsp = registerLspHandlers({ broadcast })
   const debugger_ = registerDebugHandlers({ broadcast })
   const plugins = registerPluginHandlers({ broadcast })
-  app.on('before-quit', () => {
-    void lsp.dispose()
-    void debugger_.dispose()
-    void plugins.dispose()
-  })
+  onShutdown('language servers', () => lsp.dispose())
+  onShutdown('debug adapters', () => debugger_.dispose())
+  onShutdown('plugin hosts', () => plugins.dispose())
 
   registerAppHandlers({ broadcast, getWindow: () => mainWindow })
   registerFsHandlers({ broadcast, onFileChanged: indexer.onFileChanged })

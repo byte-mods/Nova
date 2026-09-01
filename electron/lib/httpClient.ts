@@ -11,13 +11,22 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import type { HttpBody, HttpRequest, HttpResponse, RedirectHop } from '../../shared/http'
-import { applyAuth, redactHeaders } from './httpAuth'
+import { applyAuth, redactHeaders, redactUrl } from './httpAuth'
+import { PathEscapeError, resolveInRoot } from './workspacePath'
 import type { CookieJar } from './cookieJar'
 
 export interface SendContext {
   jar: CookieJar
   /** Directory of the `.http` file, for resolving `< ./file` and upload paths. */
   baseDir: string
+  /**
+   * The open project. Every path a `.http` file names has to land inside it.
+   *
+   * Optional because the CLI runner and the tests drive requests with no
+   * project open; when it is absent the `.http` file's own directory is the
+   * boundary instead, which is narrower rather than wider.
+   */
+  projectRoot?: string
   defaultTimeoutMs: number
   maxBodyBytes: number
 }
@@ -59,7 +68,7 @@ export async function sendHttpRequest(
 
   let payload: { body: BodyInit | undefined; headers: Record<string, string> }
   try {
-    payload = await buildBody(request.body, ctx.baseDir)
+    payload = await buildBody(request.body, ctx.baseDir, ctx.projectRoot ?? ctx.baseDir)
   } catch (err) {
     return { ...base(), error: (err as Error).message }
   }
@@ -83,6 +92,20 @@ export async function sendHttpRequest(
   const timeout = request.timeoutMs ?? ctx.defaultTimeoutMs
   const redirects: RedirectHop[] = []
   const cookiesSet: string[] = []
+
+  /**
+   * Everything that authenticates this request, by header name.
+   *
+   * The fixed three are the ones every client knows about. The rest come from
+   * `applyAuth`, because an API key scheme puts its secret in a header the user
+   * named — `X-Company-Token` is a credential and `X-Request-Id` is not, and
+   * only the thing that set it can tell them apart.
+   */
+  const credentialHeaders = new Set(
+    ['authorization', 'proxy-authorization', 'cookie', ...Object.keys(auth.headers)].map((name) =>
+      name.toLowerCase(),
+    ),
+  )
 
   // `GRAPHQL` is Nova's verb for picking the protocol, not something to put on
   // the wire — GraphQL over HTTP is a POST, and a server handed an unknown
@@ -137,7 +160,23 @@ export async function sendHttpRequest(
       } catch {
         return { ...base(), redirects, cookies: cookiesSet, error: `Redirect to an unreadable location: ${location}` }
       }
-      redirects.push({ status: response.status, from: url, to: next })
+      // A redirect that leaves the origin must not take the credentials with
+      // it. `redirect: 'manual'` means Nova follows the chain itself, so the
+      // browser rule that would have applied here has to be applied here: an
+      // open redirect on an authenticated host would otherwise hand a bearer
+      // token to whatever host the attacker named.
+      const hop: RedirectHop = { status: response.status, from: url, to: next }
+      if (!sameOrigin(url, next)) {
+        const dropped: string[] = []
+        for (const name of Object.keys(headers)) {
+          if (credentialHeaders.has(name.toLowerCase())) {
+            delete headers[name]
+            dropped.push(name)
+          }
+        }
+        if (dropped.length) hop.strippedCredentials = dropped
+      }
+      redirects.push(hop)
 
       // 303 always becomes a GET; 301 and 302 do in practice, which is what
       // every browser does and what servers now expect. 307 and 308 exist
@@ -176,8 +215,10 @@ export async function sendHttpRequest(
       cookies: cookiesSet,
       sent: {
         method,
-        url,
-        headers: redactHeaders(sentHeaders),
+        // An API key placed in the query string is just as much a credential as
+        // one in a header, and this record is what the history file keeps.
+        url: redactUrl(url, Object.keys(auth.query)),
+        headers: redactHeaders(sentHeaders, Object.keys(auth.headers)),
         body: describeBody(request.body),
       },
     }
@@ -194,6 +235,7 @@ export async function sendHttpRequest(
 export async function buildBody(
   body: HttpBody,
   baseDir: string,
+  projectRoot: string = baseDir,
 ): Promise<{ body: BodyInit | undefined; headers: Record<string, string> }> {
   switch (body.kind) {
     case 'none':
@@ -203,7 +245,15 @@ export async function buildBody(
       return { body: body.text, headers: guessContentType(body.text) }
 
     case 'file': {
-      const file = path.resolve(baseDir, body.path)
+      // `< ./payload.json` is the author naming a file next to their own, so it
+      // resolves against the file's directory — but it is still a path from an
+      // untrusted repository, and the body goes to a server the same file names.
+      const file = await resolveInRoot(projectRoot, body.path, { base: baseDir }).catch((err) => {
+        if (err instanceof PathEscapeError) {
+          throw new Error(`The request body ${body.path} is outside the open project.`)
+        }
+        throw err
+      })
       let contents: Buffer
       try {
         contents = await fs.readFile(file)
@@ -218,7 +268,7 @@ export async function buildBody(
 
     case 'multipart': {
       const boundary = `----NovaBoundary${randomBoundary()}`
-      const encoded = await encodeMultipart(body.parts, baseDir, boundary)
+      const encoded = await encodeMultipart(body.parts, baseDir, boundary, projectRoot)
       return {
         body: new Uint8Array(encoded),
         headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}` },
@@ -255,6 +305,7 @@ async function encodeMultipart(
   parts: { name: string; value?: string; filename?: string; contentType?: string }[],
   baseDir: string,
   boundary: string,
+  projectRoot: string,
 ): Promise<Buffer> {
   const chunks: Buffer[] = []
 
@@ -264,7 +315,12 @@ async function encodeMultipart(
     let contentType = part.contentType
 
     if (part.filename !== undefined) {
-      const file = path.resolve(baseDir, part.filename)
+      const file = await resolveInRoot(projectRoot, part.filename, { base: baseDir }).catch((err) => {
+        if (err instanceof PathEscapeError) {
+          throw new Error(`The upload ${part.filename} is outside the open project.`)
+        }
+        throw err
+      })
       try {
         contents = await fs.readFile(file)
       } catch {
@@ -346,6 +402,22 @@ function describeBody(body: HttpBody): string {
 }
 
 /* ---------------- small helpers ---------------- */
+
+/**
+ * Whether two URLs share scheme, host and port.
+ *
+ * Compared as parsed origins rather than as strings, so `https://api.example.com`
+ * and `https://api.example.com:443` are the one host they actually are. An
+ * unparseable side answers false, which drops the credentials — the safe way
+ * round when the destination cannot be read.
+ */
+function sameOrigin(a: string, b: string): boolean {
+  try {
+    return new URL(a).origin === new URL(b).origin
+  } catch {
+    return false
+  }
+}
 
 function isRedirect(status: number): boolean {
   return status === 301 || status === 302 || status === 303 || status === 307 || status === 308

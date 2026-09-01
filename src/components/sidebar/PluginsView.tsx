@@ -39,11 +39,12 @@ export default function PluginsView() {
 
   const busy = install?.stage !== undefined && install.stage !== 'done' && install.stage !== 'error'
 
-  async function submit() {
+  async function submit(allowBuild = false) {
     if (!url.trim() || busy) return
     const ok = await useStore.getState().installPlugin(url.trim(), {
       ref: ref.trim() || undefined,
       permissions: granting,
+      allowBuild,
     })
     if (ok) {
       setUrl('')
@@ -121,11 +122,38 @@ export default function PluginsView() {
           {busy ? 'Installing…' : 'Install'}
         </button>
 
-        {install && (
-          <div className={`plugin-progress ${install.stage === 'error' ? 'error' : ''}`}>
-            {install.stage === 'error' && <AlertTriangle size={12} />}
-            <pre>{install.message}</pre>
+        {install?.stage === 'needs-build-consent' ? (
+          /*
+           * The one screen between pasting a URL and running that repository's
+           * shell. The command is shown verbatim rather than summarised: the
+           * whole value of asking is that the user sees what will run.
+           */
+          <div className="plugin-consent">
+            <div className="plugin-consent-head">
+              <AlertTriangle size={12} />
+              <span>{install.message}</span>
+            </div>
+            <pre className="plugin-consent-cmd">{install.buildCommand}</pre>
+            <p className="plugin-hint">
+              This runs on your machine with your permissions, before any of the permissions
+              above apply to it. Install it only if you trust the repository.
+            </p>
+            <div className="plugin-consent-actions">
+              <button className="btn sm" onClick={() => useStore.getState().setPluginInstall(null)}>
+                Cancel
+              </button>
+              <button className="btn primary sm" onClick={() => void submit(true)}>
+                Run it and install
+              </button>
+            </div>
           </div>
+        ) : (
+          install && (
+            <div className={`plugin-progress ${install.stage === 'error' ? 'error' : ''}`}>
+              {install.stage === 'error' && <AlertTriangle size={12} />}
+              <pre>{install.message}</pre>
+            </div>
+          )
         )}
       </div>
 

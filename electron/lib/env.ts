@@ -42,16 +42,51 @@ export function toolEnv(extra?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
  */
 export async function which(binary: string): Promise<string> {
   const env = toolEnv()
-  if (binary.includes('/')) {
+  const windows = process.platform === 'win32'
+
+  if (binary.includes('/') || (windows && binary.includes('\\'))) {
     return (await isExecutable(binary)) ? binary : ''
   }
 
+  // On Windows a command is `node.exe`, not `node`, and PATHEXT is the list of
+  // suffixes the shell would have tried. Without this loop the PATH scan below
+  // never matched anything, the `/bin/sh` fallback did not exist, and so no
+  // external tool could be found at all — every panel that needs one reported
+  // it missing on a machine where it was installed.
+  const suffixes = windows
+    ? (env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean)
+    : ['']
+
   for (const dir of (env.PATH ?? '').split(path.delimiter)) {
     if (!dir) continue
-    const candidate = path.join(dir, binary)
-    if (await isExecutable(candidate)) return candidate
+    for (const suffix of suffixes) {
+      const candidate = path.join(dir, binary + suffix)
+      if (await isExecutable(candidate)) return candidate
+    }
+    // A name that already carries its extension still has to resolve.
+    if (windows && path.extname(binary)) {
+      const exact = path.join(dir, binary)
+      if (await isExecutable(exact)) return exact
+    }
   }
 
+  if (windows) {
+    // `where` is the platform's own resolver, and passing the name as an
+    // argument rather than building a command string means a name with a space
+    // or a `;` in it is a name, not more command.
+    try {
+      const { stdout } = await exec('where', [binary], { env })
+      return stdout.trim().split(/\r?\n/)[0] ?? ''
+    } catch {
+      return ''
+    }
+  }
+
+  // The login-shell fallback exists for version-manager shims (nvm, rbenv,
+  // pyenv) that only appear once a profile has run. It is a shell string, so
+  // the name is checked rather than quoted — a tool name is a bare word, and
+  // anything else is a config value trying to be a command.
+  if (!/^[\w.+-]+$/.test(binary)) return ''
   try {
     const { stdout } = await exec('/bin/sh', ['-lc', `command -v ${binary}`], { env })
     return stdout.trim().split('\n')[0] ?? ''

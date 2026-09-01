@@ -18,7 +18,7 @@ import {
   X,
 } from 'lucide-react'
 import { useStore } from '@/state/store'
-import { CHANNEL, RECORDER_SOURCE, bestLocator, parseMessage } from '@/lib/e2eRecorder'
+import { bestLocator, newChannelToken, parseMessage, recorderSource } from '@/lib/e2eRecorder'
 import { tidy, toPlaywright } from '@/lib/e2eCodegen'
 import type { Locator, RecordedAction } from '@shared/e2e'
 
@@ -71,6 +71,11 @@ export default function BrowserPane({ tabId, initialUrl }: { tabId: string; init
   const modeRef = useRef({ recording: false, picking: false })
   modeRef.current = { recording, picking }
 
+  // A channel per pane, minted once and injected with the script. A page can
+  // still write to its own console; it cannot write to this prefix without
+  // first reading it out of the script running inside it.
+  const channelRef = useRef(newChannelToken())
+
   /**
    * Turns one recorder report into an action, choosing the locator here rather
    * than in the page: the ranking is the part worth being able to change and
@@ -115,7 +120,7 @@ export default function BrowserPane({ tabId, initialUrl }: { tabId: string; init
     const view = viewRef.current
     if (!view) return
     try {
-      await view.executeJavaScript(RECORDER_SOURCE)
+      await view.executeJavaScript(recorderSource(channelRef.current))
       if (next === 'record') await view.executeJavaScript('window.__novaE2E.start()')
       else if (next === 'pick') await view.executeJavaScript('window.__novaE2E.pick(true)')
       else await view.executeJavaScript('window.__novaE2E.stop()')
@@ -225,9 +230,15 @@ export default function BrowserPane({ tabId, initialUrl }: { tabId: string; init
      * console line the page writes passes straight through.
      */
     const onConsole = (e: Event) => {
+      // Nothing is listened for unless a recording or a pick is actually in
+      // progress. The recorder used to accept messages whenever the pane was
+      // open, so a page could add steps to a test the user was not recording.
+      const { recording: isRecording, picking: isPicking } = modeRef.current
+      if (!isRecording && !isPicking) return
+
       const message = (e as unknown as { message: string }).message ?? ''
-      if (!message.includes(CHANNEL)) return
-      const payload = parseMessage(message)
+      if (!message.includes(channelRef.current)) return
+      const payload = parseMessage(message, channelRef.current)
       if (!payload) return
       handleRecorderMessage(payload)
     }
@@ -241,7 +252,7 @@ export default function BrowserPane({ tabId, initialUrl }: { tabId: string; init
       const { recording: isRecording, picking: isPicking } = modeRef.current
       if (!isRecording && !isPicking) return
       void view
-        .executeJavaScript(RECORDER_SOURCE)
+        .executeJavaScript(recorderSource(channelRef.current))
         .then(() =>
           view.executeJavaScript(
             isPicking ? 'window.__novaE2E.pick(true)' : 'window.__novaE2E.start()',

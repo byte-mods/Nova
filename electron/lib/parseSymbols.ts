@@ -12,6 +12,12 @@ const CONTROL_KEYWORDS = new Set([
   'yield', 'await', 'with', 'match', 'loop', 'in', 'is', 'as', 'not',
 ])
 
+/**
+ * Longer than any real declaration, and short enough that the ambiguous
+ * patterns cannot backtrack for a noticeable time on a line that reaches it.
+ */
+const MAX_DECLARATION_LINE = 2_000
+
 /** Extracts declarations from one file, tracking the enclosing container. */
 export function parseSymbols(file: string, language: string, text: string): CodeSymbol[] {
   const rules = rulesFor(language)
@@ -56,40 +62,48 @@ export function parseSymbols(file: string, language: string, text: string): Code
       }
     }
 
-    for (const rule of rules) {
-      const match = rule.re.exec(line)
-      if (!match) continue
-      const name = match[rule.group ?? 1]
-      if (!name) break
-      if (CONTROL_KEYWORDS.has(name)) break
-      if (rule.topLevelOnly && indent > 0) continue
+    // A minified bundle is one line of a few hundred kilobytes, and several of
+    // the declaration patterns below are ambiguous enough to backtrack
+    // catastrophically on it — which froze the whole app when a project
+    // happened to contain a `.min.js`. No language writes a declaration on a
+    // line this long, so there is nothing to lose by not looking. Brace depth
+    // is still counted below, so containers stay correct across the line.
+    if (line.length <= MAX_DECLARATION_LINE) {
+      for (const rule of rules) {
+        const match = rule.re.exec(line)
+        if (!match) continue
+        const name = match[rule.group ?? 1]
+        if (!name) break
+        if (CONTROL_KEYWORDS.has(name)) break
+        if (rule.topLevelOnly && indent > 0) continue
 
-      const container = stack.length ? stack[stack.length - 1].name : ''
-      let kind = rule.kind
-      if (rule.methodInContainer && container) kind = 'method'
+        const container = stack.length ? stack[stack.length - 1].name : ''
+        let kind = rule.kind
+        if (rule.methodInContainer && container) kind = 'method'
 
-      symbols.push({
-        name,
-        kind,
-        file,
-        line: i + 1,
-        column: Math.max(1, line.indexOf(name) + 1),
-        container,
-        signature: line.trim().slice(0, 200),
-        language,
-        exported: isExported(line, name, language),
-      })
+        symbols.push({
+          name,
+          kind,
+          file,
+          line: i + 1,
+          column: Math.max(1, line.indexOf(name) + 1),
+          container,
+          signature: line.trim().slice(0, 200),
+          language,
+          exported: isExported(line, name, language),
+        })
 
-      if (rule.opensContainer) {
-        const net = countBraces(line)
-        // `interface Order { id: string }` opens and closes on one line — it has
-        // no body to nest into, so it must not become a container.
-        const selfContained = !indentScoped && line.includes('{') && net <= 0
-        if (!selfContained) {
-          stack.push({ name, indent, baseDepth: depth, opened: net > 0, line: i })
+        if (rule.opensContainer) {
+          const net = countBraces(line)
+          // `interface Order { id: string }` opens and closes on one line — it has
+          // no body to nest into, so it must not become a container.
+          const selfContained = !indentScoped && line.includes('{') && net <= 0
+          if (!selfContained) {
+            stack.push({ name, indent, baseDepth: depth, opened: net > 0, line: i })
+          }
         }
+        break // first matching rule wins
       }
-      break // first matching rule wins
     }
 
     if (!indentScoped) {

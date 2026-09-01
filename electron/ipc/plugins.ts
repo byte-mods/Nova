@@ -82,13 +82,23 @@ export function registerPluginHandlers(ctx: Ctx) {
 
   ipcMain.handle(
     'plugins:install',
-    async (_e, url: string, options?: { ref?: string; permissions?: PluginPermission[]; force?: boolean }) => {
+    async (
+      _e,
+      url: string,
+      options?: {
+        ref?: string
+        permissions?: PluginPermission[]
+        force?: boolean
+        allowBuild?: boolean
+      },
+    ) => {
       const onProgress = (p: PluginInstallProgress) => ctx.broadcast('plugins:install-progress', p)
       const plugin = await installFromGit({
         url,
         ref: options?.ref,
         grantedPermissions: options?.permissions,
         force: options?.force,
+        allowBuild: options?.allowBuild,
         onProgress,
       })
 

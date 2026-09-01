@@ -17,7 +17,7 @@ import path from 'node:path'
 import type { ScanOptions, ScanResult, SecurityFinding, Severity } from '../../shared/security'
 import { isScannable, scanForVulnerabilities } from '../lib/sast'
 import { scanForSecrets } from '../lib/secretScan'
-import { auditDependencies, readDependencies } from '../lib/depAudit'
+import { auditDependencies, readDependencies, readDependenciesDetailed } from '../lib/depAudit'
 import { walk } from '../lib/scan'
 
 interface Ctx {
@@ -132,9 +132,19 @@ export function registerSecurityHandlers(ctx: Ctx) {
             message: 'Checking dependencies against published advisories',
           })
 
-          const dependencies = await readDependencies(root)
+          const { dependencies, unreadable } = await readDependenciesDetailed(root)
+          // Said first and separately from the result: a lockfile that could
+          // not be read is not a project without vulnerabilities, and the
+          // difference has to reach the person reading the report.
+          if (unreadable.length) {
+            result.notes.push(
+              `Could not read ${unreadable.join(', ')} — anything pinned there was not checked.`,
+            )
+          }
           if (!dependencies.length) {
-            result.notes.push('No lockfile found, so dependencies were not checked.')
+            if (!unreadable.length) {
+              result.notes.push('No lockfile found, so dependencies were not checked.')
+            }
           } else {
             const { findings, note } = await auditDependencies(root, dependencies)
             for (const finding of findings) result.findings.push({ ...finding, id: newId() })

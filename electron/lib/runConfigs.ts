@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import type { RunConfig, RunConfigEntry } from '../../shared/types'
+import { readJsonFileOrQuarantine, withFileLock, writeJsonFile } from './fileStore'
 
 /**
  * Composes a shell command from an entry's parts.
@@ -36,21 +37,29 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`
 }
 
-/** Reads `.nova/run.json` into editable entries. */
-export async function readRunConfigEntries(root: string): Promise<RunConfigEntry[]> {
-  try {
-    const raw = JSON.parse(await fs.readFile(path.join(root, '.nova', 'run.json'), 'utf8'))
-    const list = Array.isArray(raw) ? raw : (raw.configurations ?? [])
-    return list.filter((entry: RunConfigEntry) => entry && typeof entry.name === 'string')
-  } catch {
-    return []
-  }
+function runConfigFile(root: string): string {
+  return path.join(root, '.nova', 'run.json')
 }
 
-export async function writeRunConfigEntries(root: string, entries: RunConfigEntry[]): Promise<void> {
-  const dir = path.join(root, '.nova')
-  await fs.mkdir(dir, { recursive: true })
-  await fs.writeFile(path.join(dir, 'run.json'), JSON.stringify({ configurations: entries }, null, 2))
+/**
+ * Reads `.nova/run.json` into editable entries.
+ *
+ * A file the user has hand-edited into invalid JSON is moved aside rather than
+ * read as "no configurations" — that reading is what let the next save delete
+ * the whole file, one save after the typo that caused it.
+ */
+export async function readRunConfigEntries(root: string): Promise<RunConfigEntry[]> {
+  const raw = await readJsonFileOrQuarantine<unknown>(runConfigFile(root), [])
+  const list = Array.isArray(raw) ? raw : ((raw as { configurations?: unknown })?.configurations ?? [])
+  if (!Array.isArray(list)) return []
+  return list.filter((entry: RunConfigEntry) => entry && typeof entry.name === 'string')
+}
+
+export function writeRunConfigEntries(root: string, entries: RunConfigEntry[]): Promise<void> {
+  const file = runConfigFile(root)
+  return withFileLock(file, () =>
+    writeJsonFile(file, { configurations: entries }, { mode: 0o644 }),
+  )
 }
 
 /**

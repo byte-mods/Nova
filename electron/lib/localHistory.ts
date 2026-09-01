@@ -13,6 +13,16 @@ import type { HistoryRevision } from '../../shared/types'
 const MAX_REVISIONS_PER_FILE = 60
 const MAX_AGE_DAYS = 30
 const MAX_SNAPSHOT_BYTES = 2 * 1024 * 1024
+
+/**
+ * The ceiling when the caller says this snapshot is the only copy left.
+ *
+ * The ordinary cap exists so history does not fill the disk with copies of
+ * generated files. But it was also refusing exactly the case history is for —
+ * a large file about to be overwritten by something smaller — so a second,
+ * higher ceiling covers that without giving up the first one entirely.
+ */
+const MAX_CRITICAL_SNAPSHOT_BYTES = 64 * 1024 * 1024
 /** Snapshots closer together than this collapse into the previous one. */
 const COALESCE_MS = 60_000
 
@@ -28,33 +38,51 @@ function bucketFor(projectRoot: string, file: string) {
   return path.join(historyRoot(), hash(projectRoot), hash(file))
 }
 
-/** Records the content a file had *before* it was overwritten. */
+/**
+ * Records the content a file had *before* it was overwritten.
+ *
+ * `critical` marks a save that is the last chance to keep this content — the
+ * caller knows the write about to happen cannot be reconstructed. It raises the
+ * size cap, because refusing to snapshot a large file and then letting it be
+ * overwritten is the one outcome this module exists to prevent.
+ */
 export async function record(
   projectRoot: string,
   file: string,
   previousContent: string,
   label = 'save',
+  options: { critical?: boolean } = {},
 ) {
-  if (previousContent.length > MAX_SNAPSHOT_BYTES) return
+  const cap = options.critical ? MAX_CRITICAL_SNAPSHOT_BYTES : MAX_SNAPSHOT_BYTES
+  if (previousContent.length > cap) return
   const bucket = bucketFor(projectRoot, file)
   await fs.mkdir(bucket, { recursive: true })
 
   const existing = await listRaw(bucket)
   const newest = existing[0]
 
-  // Nothing changed since the last snapshot, or it was taken moments ago.
+  // Within the coalescing window the new snapshot *replaces* the previous one
+  // rather than being dropped. Dropping it is what the old code did, and it
+  // meant a burst of saves — which is what a save-on-type editor produces —
+  // kept only the oldest content and lost every state after it. Replacing
+  // keeps one entry per window, which is what "collapse" was supposed to mean.
+  let replacing: string | undefined
   if (newest) {
-    if (Date.now() - newest.at < COALESCE_MS) return
     try {
       const previous = await fs.readFile(path.join(bucket, newest.id), 'utf8')
+      // Genuinely nothing changed; there is no new state to keep.
       if (previous === previousContent) return
     } catch {
       /* unreadable snapshot; fall through and write a new one */
     }
+    if (Date.now() - newest.at < COALESCE_MS) replacing = newest.id
   }
 
   const id = `${Date.now()}-${label.replace(/[^a-z]/gi, '')}.snap`
   await fs.writeFile(path.join(bucket, id), previousContent, 'utf8')
+  if (replacing && replacing !== id) {
+    await fs.rm(path.join(bucket, replacing), { force: true }).catch(() => undefined)
+  }
   await fs.writeFile(path.join(bucket, 'source.txt'), file, 'utf8').catch(() => undefined)
 
   // Prune by count and age.

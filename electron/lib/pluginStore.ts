@@ -17,6 +17,7 @@ import { execFile } from 'node:child_process'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { promisify } from 'node:util'
+import { readJsonFileOrQuarantine, withFileLock, writeJsonFile } from './fileStore'
 import {
   validateManifest,
   type InstalledPlugin,
@@ -47,18 +48,13 @@ interface RegistryShape {
 }
 
 async function readRegistry(): Promise<RegistryShape> {
-  try {
-    const raw = JSON.parse(await fs.readFile(registryFile(), 'utf8')) as RegistryShape
-    if (!raw || !Array.isArray(raw.plugins)) return { plugins: [] }
-    return raw
-  } catch {
-    return { plugins: [] }
-  }
+  const raw = await readJsonFileOrQuarantine<RegistryShape>(registryFile(), { plugins: [] })
+  if (!raw || !Array.isArray(raw.plugins)) return { plugins: [] }
+  return raw
 }
 
 async function writeRegistry(reg: RegistryShape): Promise<void> {
-  await fs.mkdir(pluginsDir(), { recursive: true })
-  await fs.writeFile(registryFile(), JSON.stringify(reg, null, 2), 'utf8')
+  await writeJsonFile(registryFile(), reg)
 }
 
 export async function listPlugins(): Promise<InstalledPlugin[]> {
@@ -70,7 +66,7 @@ export async function listPlugins(): Promise<InstalledPlugin[]> {
     if (await exists(path.join(p.dir, MANIFEST_NAME))) alive.push(p)
     else changed = true
   }
-  if (changed) await writeRegistry({ plugins: alive })
+  if (changed) await withFileLock(registryFile(), () => writeRegistry({ plugins: alive }))
   return alive
 }
 
@@ -79,11 +75,15 @@ export async function getPlugin(id: string): Promise<InstalledPlugin | undefined
 }
 
 async function upsert(plugin: InstalledPlugin): Promise<void> {
-  const reg = await readRegistry()
-  const idx = reg.plugins.findIndex((p) => p.manifest.id === plugin.manifest.id)
-  if (idx === -1) reg.plugins.push(plugin)
-  else reg.plugins[idx] = plugin
-  await writeRegistry(reg)
+  // Installing two plugins at once used to have each read the registry, add its
+  // own entry, and write back a copy with the other one missing.
+  await withFileLock(registryFile(), async () => {
+    const reg = await readRegistry()
+    const idx = reg.plugins.findIndex((p) => p.manifest.id === plugin.manifest.id)
+    if (idx === -1) reg.plugins.push(plugin)
+    else reg.plugins[idx] = plugin
+    await writeRegistry(reg)
+  })
 }
 
 export async function setEnabled(id: string, enabled: boolean): Promise<InstalledPlugin | undefined> {
@@ -115,6 +115,16 @@ export async function uninstall(id: string): Promise<void> {
   }
 }
 
+/** Raised when an install stops to ask about the manifest's build command. */
+export class PluginBuildConsentError extends Error {
+  readonly command: string
+  constructor(command: string, name: string) {
+    super(`${name} wants to run \`${command}\` on install. Review it and install again to allow it.`)
+    this.name = 'PluginBuildConsentError'
+    this.command = command
+  }
+}
+
 export interface InstallOptions {
   url: string
   ref?: string
@@ -122,6 +132,16 @@ export interface InstallOptions {
   grantedPermissions?: PluginPermission[]
   /** Re-clone over an existing install of the same id. */
   force?: boolean
+  /**
+   * The user has seen the manifest's build command and agreed to run it.
+   *
+   * Installing a plugin *is* running its code, and the build command is the
+   * first place that happens — before any permission the user ticked has been
+   * consulted, because it runs on the clone rather than through the host. So
+   * the install stops at it and asks, rather than treating the paste of a URL
+   * as consent to execute whatever the repository's manifest names.
+   */
+  allowBuild?: boolean
   onProgress?: (p: PluginInstallProgress) => void
 }
 
@@ -172,6 +192,18 @@ export async function installFromGit(opts: InstallOptions): Promise<InstalledPlu
       throw new Error(
         `${manifest.name} (${manifest.id}) is already installed. Use Update to pull the latest commit, or reinstall to replace it.`,
       )
+    }
+
+    // Asked before promotion, so refusing leaves nothing installed.
+    if (manifest.build && !opts.allowBuild) {
+      onProgress?.({
+        url,
+        stage: 'needs-build-consent',
+        message: `${manifest.name} runs a build command when it is installed.`,
+        pluginId: manifest.id,
+        buildCommand: manifest.build,
+      })
+      throw new PluginBuildConsentError(manifest.build, manifest.name)
     }
 
     // Promote: swap staging into place only now that the manifest is good.

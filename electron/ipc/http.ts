@@ -106,6 +106,7 @@ export function registerHttpHandlers(ctx: Ctx) {
       const response = await sendHttpRequest(request, {
         jar,
         baseDir: path.dirname(file),
+        projectRoot: projectRoot || path.dirname(file),
         defaultTimeoutMs: REQUEST_TIMEOUT_MS,
         maxBodyBytes: MAX_BODY_BYTES,
       })
@@ -188,7 +189,7 @@ export function registerHttpHandlers(ctx: Ctx) {
     async (_e, file: string, requestId: string, environment: string | null): Promise<GrpcServices> => {
       const { request, error } = await resolve(file, requestId, environment)
       if (!request) return { source: 'reflection', methods: [], error }
-      return listServices(request.url, request.protoPath, path.dirname(file))
+      return listServices(request.url, request.protoPath, path.dirname(file), projectRoot || path.dirname(file))
     },
   )
 
@@ -239,6 +240,7 @@ export function registerHttpHandlers(ctx: Ctx) {
             },
             onSystem: (note) => emit('system', note),
           },
+          projectRoot || path.dirname(file),
         )
       } catch (err) {
         const message = (err as Error).message
@@ -309,6 +311,7 @@ export function registerHttpHandlers(ctx: Ctx) {
         context: {
           jar,
           baseDir: path.dirname(file),
+          projectRoot: projectRoot || path.dirname(file),
           defaultTimeoutMs: REQUEST_TIMEOUT_MS,
           maxBodyBytes: MAX_BODY_BYTES,
         },

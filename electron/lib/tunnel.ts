@@ -101,7 +101,11 @@ export async function openTunnel(port: number, onLog?: (line: string) => void): 
       for (const line of text.split('\n')) {
         if (line.trim()) onLog?.(line.trim())
       }
-      const match = URL_PATTERN.exec(text)
+      // Matched against the accumulated output rather than this chunk: the URL
+      // is printed inside a box-drawn banner, and a chunk boundary can land in
+      // the middle of it. When that happened the tunnel was up and Nova waited
+      // out its own timeout and reported failure.
+      const match = URL_PATTERN.exec(output)
       if (match) finish(match[1])
     }
 

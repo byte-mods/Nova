@@ -453,6 +453,12 @@ export function bodyEndLine(
   return positionAt(masked.text, close, starts).line
 }
 
+/**
+ * Longer than any real declaration, and short enough that no amount of
+ * backtracking over it is noticeable.
+ */
+const MAX_DECLARATION_LINE = 2_000
+
 function scanDeclaration(
   lines: string[],
   masked: Masked,
@@ -462,6 +468,13 @@ function scanDeclaration(
   kind: 'function' | 'class',
   line: number,
 ): Declaration | null {
+  // The declaration patterns below carry the usual ambiguity of hand-written
+  // language heuristics — a character class that includes a space, next to a
+  // `\s+` that could match the same space. On a normal line that costs
+  // nothing, and no language writes a declaration on a line this long anyway,
+  // so a minified bundle is simply not looked at rather than being explored.
+  if (lines[line].length > MAX_DECLARATION_LINE) return null
+
   for (const pattern of patterns) {
     const match = pattern.exec(lines[line])
     if (!match) continue

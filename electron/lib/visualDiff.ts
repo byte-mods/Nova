@@ -165,6 +165,10 @@ export function diffImages(before: RgbaImage, after: RgbaImage): { changed: numb
 
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
 
+/** Far past any screenshot, and short of the sizes that make the header a weapon. */
+const MAX_DIMENSION = 20_000
+const MAX_PIXELS = 80_000_000
+
 /**
  * Decodes the PNG subset Electron produces: 8-bit RGB or RGBA, no interlace.
  * Anything else throws rather than being half-read, because a silently wrong
@@ -180,11 +184,16 @@ export async function decodePng(buffer: Buffer): Promise<RgbaImage> {
   let colorType = 0
   const idat: Buffer[] = []
 
-  while (offset < buffer.length) {
+  while (offset + 8 <= buffer.length) {
     const length = buffer.readUInt32BE(offset)
+    // A chunk that runs past the end of the file is a truncated or hostile
+    // one; reading it yields a short `subarray` and a silently wrong decode.
+    if (length > buffer.length - offset - 12) throw new Error('a PNG chunk runs past the end of the file')
     const type = buffer.toString('ascii', offset + 4, offset + 8)
     const body = buffer.subarray(offset + 8, offset + 8 + length)
     offset += 12 + length
+
+    if (type === 'IHDR' && length < 13) throw new Error('the PNG header is too short')
 
     if (type === 'IHDR') {
       width = body.readUInt32BE(0)
@@ -202,9 +211,33 @@ export async function decodePng(buffer: Buffer): Promise<RgbaImage> {
   if (bitDepth !== 8) throw new Error(`unsupported bit depth ${bitDepth}`)
   if (colorType !== 2 && colorType !== 6) throw new Error(`unsupported colour type ${colorType}`)
 
+  // A baseline is a file in the repository, so its header is untrusted input.
+  // The dimensions are two 32-bit numbers and nothing checked them: a 40-byte
+  // PNG could claim 65535 x 65535, and the allocation below is `width * height
+  // * 4` — 17 GB — decided entirely by the header. The size limit has to come
+  // before the allocation rather than be discovered while filling it.
+  if (width <= 0 || height <= 0) throw new Error('a PNG with no pixels')
+  if (width > MAX_DIMENSION || height > MAX_DIMENSION) {
+    throw new Error(`the image claims ${width}x${height}, over the ${MAX_DIMENSION}px limit`)
+  }
+  if (width * height > MAX_PIXELS) {
+    throw new Error(`the image claims ${width * height} pixels, over the ${MAX_PIXELS} limit`)
+  }
+
   const channels = colorType === 6 ? 4 : 3
-  const raw = await inflate(Buffer.concat(idat))
   const stride = width * channels
+  const expected = height * (stride + 1)
+
+  // `maxOutputLength` makes zlib stop at the limit rather than decompress a
+  // gigabyte of zeros first and only then let us notice. The equality check
+  // after it is the other half: a body that inflates to the wrong size is not a
+  // short read to be discovered row by row, it is a file that does not describe
+  // the image its header claims.
+  const raw = await inflate(Buffer.concat(idat), { maxOutputLength: expected })
+  if (raw.length !== expected) {
+    throw new Error(`the image data is ${raw.length} bytes, not the ${expected} its header implies`)
+  }
+
   const data = Buffer.allocUnsafe(width * height * 4)
 
   // Each row is prefixed with the filter that was applied to it, and undoing
