@@ -99,9 +99,13 @@ export const AI_PROVIDERS: AiProviderSpec[] = [
     // Aliases, which the CLI resolves to the current model of that name.
     models: [
       { id: 'haiku', label: 'Haiku', tier: 'fast' },
-      { id: 'fable', label: 'Fable', tier: 'fast' },
       { id: 'sonnet', label: 'Sonnet', tier: 'balanced' },
       { id: 'opus', label: 'Opus', tier: 'deep' },
+      // Fable is the deepest of these, not the fastest: thinking is always on
+      // and cannot be turned off, and it costs about twice what Opus does. It
+      // sat under `fast` — the tier this app describes as "answers soonest,
+      // cheapest" — which promised a user the exact opposite of what they got.
+      { id: 'fable', label: 'Fable', tier: 'deep' },
     ],
     // Straight from `claude --help`.
     efforts: ['low', 'medium', 'high', 'xhigh', 'max'],

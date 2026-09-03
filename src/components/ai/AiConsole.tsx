@@ -12,6 +12,7 @@ import {
   ListChecks,
   MessagesSquare,
   Plus,
+  Repeat,
   Trash2,
   Sparkles,
   Terminal,
@@ -29,6 +30,13 @@ import { ChangeLine, CommandGroup } from './Activity'
 import { buildContextBlock } from '@/lib/aiContext'
 import { applyProgress, buildExecutePrompt, buildPlanPrompt, needsPlan, parsePlan } from '@/lib/planning'
 import { MODEL_TIERS, providerSpec } from '@shared/aiProviders'
+import {
+  advance,
+  beginAutoRun,
+  decideNext,
+  openingPrompt,
+  type AutoRunState,
+} from '@/lib/autoRun'
 
 export default function AiConsole() {
   const width = useStore((s) => s.settings.aiWidth)
@@ -49,6 +57,7 @@ export default function AiConsole() {
   const [attachments, setAttachments] = useState<string[]>([])
   const [runId, setRunId] = useState<string | null>(null)
   const [planningEnabled, setPlanningEnabled] = useState(true)
+  const autoRun = useStore((s) => s.autoRun)
   const [showChats, setShowChats] = useState(false)
   const [showPlans, setShowPlans] = useState(false)
   const [localModels, setLocalModels] = useState<string[]>([])
@@ -59,6 +68,15 @@ export default function AiConsole() {
    */
   const modeRef = useRef<'chat' | 'plan' | 'execute'>('chat')
   const requestRef = useRef('')
+  /**
+   * The automatic run in flight, and the door back into `startRun`.
+   *
+   * Refs for the same reason the two above are: the event subscription is
+   * created once, and a value captured in it would be the one from the render
+   * that made it. `continueRef` is filled in below, after `startRun` exists.
+   */
+  const autoRef = useRef<AutoRunState | null>(null)
+  const continueRef = useRef<((prompt: string) => Promise<void>) | null>(null)
   const listRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
 
@@ -66,7 +84,7 @@ export default function AiConsole() {
   const spec = providerSpec(settings.aiProvider)
   const activeFile = tabs.find((t) => t.id === activeTabId)?.path
 
-  useAiEvents(modeRef, requestRef)
+  useAiEvents(modeRef, requestRef, autoRef, continueRef)
 
   useEffect(() => {
     const el = listRef.current
@@ -158,10 +176,34 @@ export default function AiConsole() {
     await window.nova.ai.ack(id)
   }
 
+  // The event hook drives continuations through this, so an automatic run's
+  // next turn is started by exactly the same path as a typed one.
+  continueRef.current = async (prompt: string) => {
+    await startRun(prompt, 'chat')
+  }
+
   const send = async () => {
     const prompt = input.trim()
     if (!prompt || running || !root) return
     setInput('')
+
+    /*
+     * An automatic run takes precedence over planning.
+     *
+     * Both exist to stop the agent halting halfway, and running them together
+     * would mean a plan the loop then has to approve on the user's behalf —
+     * which is an approval gate that approves itself, and worse than not having
+     * one. The loop's own test gate is the check here.
+     */
+    if (settings.aiAutoRun) {
+      // A previous run that was stopped left this set; a new one starts clean,
+      // or its very first turn would be read as cancelled and go nowhere.
+      useStore.getState().setAiAutoCancelled(false)
+      autoRef.current = beginAutoRun(prompt, settings.aiAutoMaxIterations ?? 0)
+      useStore.getState().setAutoRun(autoRef.current)
+      await startRun(openingPrompt(prompt), 'chat', prompt)
+      return
+    }
 
     // A request that will change files gets planned first. A question does not:
     // forcing a plan on "what does this do" doubles the wait for nothing.
@@ -186,6 +228,19 @@ export default function AiConsole() {
 
   const stop = () => {
     if (runId) void window.nova.ai.cancel(runId)
+    /*
+     * Stop has to end the *run*, not the turn.
+     *
+     * Killing the child still produces a `done`, and the loop would read that
+     * as a turn that finished and start another one — so pressing Stop on an
+     * automatic run would look like it did nothing. The flag is what the loop
+     * checks before deciding anything; it is cleared there.
+     */
+    if (autoRef.current) {
+      autoRef.current = null
+      useStore.getState().setAiAutoCancelled(true)
+      useStore.getState().setAutoRun(null)
+    }
     // Release the console even if the process has already gone away. Cancel is
     // best-effort; leaving the composer disabled because a `done` never came
     // back is the failure this is here to prevent.
@@ -432,6 +487,7 @@ export default function AiConsole() {
       </div>
 
       <div className="ai-composer">
+        {autoRun && <AutoRunStrip run={autoRun} />}
         {attachments.length > 0 && (
           <div className="ai-attachments">
             {attachments.map((file) => (
@@ -504,8 +560,25 @@ export default function AiConsole() {
               type="checkbox"
               checked={planningEnabled}
               onChange={(e) => setPlanningEnabled(e.target.checked)}
+              disabled={settings.aiAutoRun}
             />
             Plan first
+          </label>
+
+          <label
+            className={`ai-plan-toggle ${settings.aiAutoRun ? 'on' : ''}`}
+            title={
+              'Keep working without stopping between turns — until the tests pass, ' +
+              'or something genuinely needs you. This spends tokens unattended; ' +
+              'Stop ends it at any point.'
+            }
+          >
+            <input
+              type="checkbox"
+              checked={settings.aiAutoRun === true}
+              onChange={(e) => useStore.getState().setSettings({ aiAutoRun: e.target.checked })}
+            />
+            Keep going
           </label>
 
           <span style={{ flex: 1 }} />
@@ -525,6 +598,43 @@ export default function AiConsole() {
           )}
         </div>
       </div>
+    </div>
+  )
+}
+
+/**
+ * What an unattended run looks like while it is running.
+ *
+ * The whole point of the mode is that nobody is watching each turn, so the one
+ * thing this has to answer at a glance is "is it still getting anywhere" — the
+ * turn count, the stage, and how close the stall guard is to ending it. A
+ * spinner would say none of that.
+ */
+function AutoRunStrip({ run }: { run: AutoRunState }) {
+  const stage =
+    run.stage === 'verifying'
+      ? 'running the tests'
+      : run.stage === 'manual'
+        ? 'writing the manual checks'
+        : 'working'
+
+  return (
+    <div className="ai-auto-strip">
+      <Repeat size={11} />
+      <span className="ai-auto-stage">
+        Turn {run.iteration + 1}
+        {run.maxIterations > 0 && ` of ${run.maxIterations}`} — {stage}
+      </span>
+      {run.verification?.state === 'failed' && (
+        <span className="ai-auto-warn">
+          {run.verification.failed} failing
+        </span>
+      )}
+      {run.idleTurns > 0 && (
+        <span className="ai-auto-warn">
+          {run.idleTurns} turn{run.idleTurns === 1 ? '' : 's'} with no changes
+        </span>
+      )}
     </div>
   )
 }
@@ -736,7 +846,12 @@ async function runVerification(planId: string, root: string) {
 function useAiEvents(
   modeRef: { current: 'chat' | 'plan' | 'execute' },
   requestRef: { current: string },
+  autoRef: { current: AutoRunState | null },
+  continueRef: { current: ((prompt: string) => Promise<void>) | null },
 ) {
+  // Reset at the start of each turn by the auto-run branch below.
+  const changedRef = useRef(0)
+
   useEffect(() => {
     const unsubscribe = window.nova.ai.onEvent((raw) => {
       const event = raw as AiEvent
@@ -850,6 +965,11 @@ function useAiEvents(
             void store.openFile(event.change.path, { background: true })
           }
 
+          // What the stall guard counts. Tracked per run rather than read back
+          // off the message, because a turn that edits and then reverts a file
+          // still moved, and the transcript would not show it.
+          changedRef.current += 1
+
           void store.refreshGit()
           store.bumpTree()
           return
@@ -906,12 +1026,109 @@ function useAiEvents(
           modeRef.current = 'chat'
           // The conversation is only worth saving once a turn has completed.
           void store.persistChat()
+
+          if (autoRef.current) void driveAutoRun(text)
           return
         }
       }
     })
+
+    /**
+     * One step of the automatic run.
+     *
+     * Everything that decides *what* happens next is in `@/lib/autoRun` and
+     * tested there; this is only the part that cannot be pure — running the
+     * suite, writing to the transcript, and starting the next turn.
+     */
+    async function driveAutoRun(text: string) {
+      const state = autoRef.current
+      if (!state) return
+
+      const store = useStore.getState()
+      const filesChanged = changedRef.current
+      changedRef.current = 0
+
+      // A turn the user cancelled is not a turn the loop should react to —
+      // pressing Stop has to mean stopped, not "stopped for one turn".
+      if (store.aiAutoCancelled) {
+        autoRef.current = null
+        store.setAiAutoCancelled(false)
+        store.setAutoRun(null)
+        return
+      }
+
+      // The verification step resolves a claim rather than consuming an agent
+      // turn, so it must not be counted as one.
+      const resolvingSuite = state.stage === 'verifying'
+
+      let verification
+      if (resolvingSuite) {
+        const { verifyPlan } = await import('@/lib/planVerify')
+        verification = store.root ? await verifyPlan(store.root) : undefined
+
+        // A suite can run for minutes, and Stop during it must still mean
+        // stopped. Without re-checking, the assignment below would put the run
+        // back on its feet after the user had already ended it.
+        if (!autoRef.current || useStore.getState().aiAutoCancelled) {
+          autoRef.current = null
+          useStore.getState().setAiAutoCancelled(false)
+          useStore.getState().setAutoRun(null)
+          return
+        }
+      }
+
+      const decision = decideNext(state, { text, filesChanged, verification })
+      const next = advance(state, decision, { filesChanged, verification }, !resolvingSuite)
+      autoRef.current = next
+      store.setAutoRun(next)
+
+      if (decision.kind === 'verify') {
+        // Verification needs a turn of its own so the suite result is what the
+        // next decision sees. Re-enter with no new agent turn in between.
+        await driveAutoRun('')
+        return
+      }
+
+      if (decision.kind === 'stop') {
+        autoRef.current = null
+        store.addMessage({
+          id: `s${Date.now()}`,
+          role: 'assistant',
+          parts: [{ kind: 'text', text: summariseStop(next) }],
+          changes: [],
+          createdAt: Date.now(),
+        })
+        void store.persistChat()
+        return
+      }
+
+      await continueRef.current?.(decision.prompt)
+    }
+
     return unsubscribe
   }, [])
+}
+
+/** What the transcript says when an automatic run ends. */
+function summariseStop(state: AutoRunState): string {
+  const turns = `${state.iteration} turn${state.iteration === 1 ? '' : 's'}`
+  if (state.stage === 'complete') {
+    const suite =
+      state.verification?.state === 'passed'
+        ? ` The suite passed (${state.verification.passed}/${state.verification.total}).`
+        : state.verification?.state === 'unavailable'
+          ? ' There was no automated suite to run.'
+          : ''
+    return `**Finished** after ${turns}.${suite} The manual checks are in the turn above.`
+  }
+  if (state.stage === 'blocked') {
+    return `**Stopped after ${turns} — this needs you.**
+
+${state.reason ?? ''}`
+  }
+  return `**Stopped after ${turns}.**
+
+${state.reason ?? ''}`
 }
 
 /**

@@ -3846,6 +3846,32 @@
 
 .ai-plan-toggle.on { color: var(--accent); }
 .ai-plan-toggle input { width: auto; margin: 0; }
+.ai-plan-toggle input:disabled { cursor: not-allowed; }
+.ai-plan-toggle:has(input:disabled) { opacity: 0.45; cursor: not-allowed; }
+
+/* ---------------- an unattended run ---------------- */
+
+.ai-auto-strip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  margin-bottom: 6px;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  /* Tinted rather than filled: this sits above the composer for the whole run,
+     and a solid accent bar there reads as an error the user has to clear. */
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+  font-size: 10.5px;
+}
+
+.ai-auto-stage { flex: 1; }
+
+.ai-auto-warn {
+  color: var(--warning);
+  white-space: nowrap;
+}
 
 /* ---------------- breadcrumbs ---------------- */
 

@@ -393,7 +393,7 @@ export default function SettingsView() {
               placeholder={
                 settings.aiProvider === 'opencode'
                   ? 'e.g. qwen2.5-coder:0.5b — or provider/model'
-                  : 'e.g. opus, sonnet, gpt-5-codex'
+                  : 'e.g. opus, sonnet, gpt-5.3-codex'
               }
               onChange={(e) => setSettings({ aiModel: e.target.value })}
             />
@@ -424,6 +424,24 @@ export default function SettingsView() {
               <option value="default">Ask for permission</option>
               <option value="bypassPermissions">Bypass all checks</option>
             </select>
+          </Field>
+          <Field label="Keep going — turn limit">
+            <input
+              type="number"
+              min={0}
+              value={settings.aiAutoMaxIterations ?? 0}
+              onChange={(e) =>
+                setSettings({ aiAutoMaxIterations: Math.max(0, Number(e.target.value) || 0) })
+              }
+            />
+            <small className="faint">
+              How many turns an unattended run may take before it stops on its own.{' '}
+              <strong>0 means no limit</strong> — it runs until the tests pass, something
+              genuinely needs you, or three turns go by without a single file changing.
+              Stop ends it at any point. An unattended run spends tokens without asking
+              between turns, so a limit here is the one cost ceiling that does not depend
+              on anyone watching.
+            </small>
           </Field>
           <Field label="Browser home page">
             <input

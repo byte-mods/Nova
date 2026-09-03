@@ -450,6 +450,40 @@ What is new is that none of this is thrown away:
   tests*, never as a pass.
 - All of it survives a restart, per project.
 
+### Keep going, until it is actually done
+
+A turn ends when the agent has said enough, not when the work is finished — so
+the usual rhythm is read, type "continue", read, type "continue". **Keep going**,
+next to *Plan first* in the composer, hands that job to Nova: it drives the next
+turn itself until the task is genuinely complete.
+
+The agent declares its own state at the end of each turn — still working,
+finished, or blocked — and that declaration is an input rather than the verdict.
+Claiming completion does not end the run; it promotes it to the project's test
+suite, and a red suite sends the agent straight back to work with the failing
+names attached. Once the suite is green it writes a manual test plan for what it
+changed, carries out every item it can itself, records what it actually observed,
+and leaves only what needs a person — a visual check, a real device, a
+third-party account.
+
+Stopping to ask is the thing the mode exists to avoid, so it is reserved for
+what a person must actually supply: a missing credential, a destructive choice, a
+real ambiguity in the goal. A failing test, a missing file, a compile error, a
+design decision with a defensible answer — the agent is told plainly that none of
+those are blockers.
+
+The real risk of a loop like this is not a wrong answer but a confident one
+repeated forever at your expense, so something has to be moving: **three
+consecutive turns that change no file end the run**. That guard is why the turn
+limit defaults to *no limit* — a run stops when it stops making progress, rather
+than at an arbitrary number. Set a ceiling in **Settings › AI console** if you
+would rather have one. Stop ends any run immediately, mid-turn.
+
+Planning is switched off while this is on. Both exist to stop the agent halting
+halfway, and together they would produce a plan the loop approves on your behalf
+— an approval gate that approves itself is worse than none. The test gate is the
+check here.
+
 ### Six assistants, one console
 
 `claude`, `codex` and `opencode` are CLIs Nova drives directly. **Kimi**

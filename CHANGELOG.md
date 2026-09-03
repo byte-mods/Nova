@@ -14,6 +14,61 @@ The steps for a release are in [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## 1.2.3
+
+### Keep going
+
+An agent turn ends when the agent has said enough, not when the work is done.
+The gap between those two is where most of the friction in using an assistant
+lives: you read "I've implemented the first part", type "continue", read it
+again, type "continue" again — and you are really just being the loop by hand.
+
+**Keep going**, next to *Plan first* in the composer, is the loop. Nova drives
+the next turn itself and keeps driving until the task is actually finished.
+
+Three things decide when that is:
+
+- **The agent declares, Nova verifies.** Each turn ends with a marker: still
+  working, finished, or blocked. "Finished" does not end the run — it promotes
+  it to the project's test suite, and a red suite sends the agent back to work
+  with the failing test names attached. It cannot talk its way past a broken
+  build.
+- **Then the checks a suite cannot make.** Once the suite is green, the agent
+  writes a manual test plan for what it changed, carries out every item it can
+  itself, and records what it actually observed. Only the items that genuinely
+  need a person — a visual check, a real device, a third-party account — are
+  left, and it has to say so for each.
+- **Blocked means blocked.** Stopping to ask is the thing this mode exists to
+  avoid, so it is reserved for what a person must actually supply: a missing
+  credential, a destructive choice, a real ambiguity in the goal. A failing
+  test, a missing file, a compile error, a design decision with a defensible
+  answer — the agent is told plainly that none of those are blockers.
+
+The failure mode of a loop like this is not a wrong answer, it is a confident
+one repeated forever at your expense. So something has to be moving: three
+consecutive turns that change no file end the run and say so. That guard is why
+the turn limit defaults to **no limit** — a run stops when it stops making
+progress rather than at an arbitrary number. Set a ceiling in Settings › AI
+console if you would rather have one, and Stop ends any run immediately.
+
+Planning is disabled while this is on. Both features exist to stop the agent
+halting halfway, and running them together would produce a plan that the loop
+then approves on your behalf — an approval gate that approves itself is worse
+than not having one. The test gate is the check here.
+
+### Fable is a deep model, not a fast one
+
+Claude Fable was listed under the **Fast** tier — the one Nova describes as
+"answers soonest, cheapest". It is neither: thinking is always on and cannot be
+turned off, and it costs about twice what Opus does. Anyone who picked Fast to
+save time and money got the slowest and most expensive model in the list. It is
+under **Deep** now, where it belongs.
+
+The model-id placeholder in Settings also still suggested `gpt-5-codex`, which
+is no longer one of the listed Codex models.
+
+---
+
 ## 1.2.2
 
 ### An audit, and the twenty-nine things it found

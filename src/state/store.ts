@@ -17,6 +17,7 @@ import type {
 } from '@shared/types'
 import type { CoverageReport } from '@shared/coverage'
 import type { ChatSummary, Plan, StoredChat } from '@shared/chat'
+import type { AutoRunState } from '@/lib/autoRun'
 import type {
   InstalledPlugin,
   PluginInstallProgress,
@@ -299,6 +300,24 @@ export interface Settings {
   /** Reasoning effort, for the CLIs that accept one. */
   aiEffort?: string
   /**
+   * Keep the agent going until the task is finished, rather than one turn at a
+   * time.
+   *
+   * Off by default, and deliberately so: it spends the user's tokens without
+   * asking between turns, which has to be a thing someone chooses rather than
+   * something they discover on a bill.
+   */
+  aiAutoRun?: boolean
+  /**
+   * Hard ceiling on turns in an automatic run. `0` runs uncapped.
+   *
+   * Uncapped is the default because the stall guard is the real protection — a
+   * run that stops changing files ends on its own — and a fixed number is
+   * always either too small for the task that needed it or too large to be a
+   * safeguard. The Stop button ends any run immediately.
+   */
+  aiAutoMaxIterations?: number
+  /**
    * Models the user has actually used, per provider.
    *
    * Any list shipped with the editor is stale the week after it is written —
@@ -360,6 +379,8 @@ export const defaultSettings: Settings = {
   aiBaseUrls: {},
   aiFollowEdits: true,
   aiEffort: '',
+  aiAutoRun: false,
+  aiAutoMaxIterations: 0,
   aiRecentModels: {},
   browserHome: 'http://localhost:3000',
   iconPack: 'nova',
@@ -477,6 +498,16 @@ interface State {
   plans: Plan[]
   messages: AiMessage[]
   aiRunning: boolean
+  /**
+   * The automatic run in flight, for the console to draw progress from.
+   *
+   * A mirror of the ref that actually drives the loop: the loop needs a value
+   * that does not go stale inside a subscription, and the UI needs one that
+   * re-renders. Keeping both is cheaper than making either do the other's job.
+   */
+  autoRun: AutoRunState | null
+  /** Set by Stop, so the loop does not start another turn after the kill. */
+  aiAutoCancelled: boolean
   /**
    * The run the console is currently waiting on.
    *
@@ -617,6 +648,8 @@ interface State {
   addMessage: (m: AiMessage) => void
   patchMessage: (id: string, patch: (m: AiMessage) => AiMessage) => void
   setAiRunning: (running: boolean) => void
+  setAutoRun: (run: AutoRunState | null) => void
+  setAiAutoCancelled: (cancelled: boolean) => void
   setSession: (provider: AiProvider, id: string) => void
   clearConversation: () => void
   loadChats: () => Promise<void>
@@ -734,6 +767,8 @@ export const useStore = create<State>((set, get) => ({
   persistTimer: null,
   messages: [],
   aiRunning: false,
+  autoRun: null,
+  aiAutoCancelled: false,
   activeRunId: null,
   aiSessionId: noSessions(),
 
@@ -1680,6 +1715,14 @@ export const useStore = create<State>((set, get) => ({
 
   patchMessage(id, patch) {
     set({ messages: get().messages.map((m) => (m.id === id ? patch(m) : m)) })
+  },
+
+  setAutoRun(run) {
+    set({ autoRun: run })
+  },
+
+  setAiAutoCancelled(cancelled) {
+    set({ aiAutoCancelled: cancelled })
   },
 
   setAiRunning(running) {
