@@ -1,3 +1,4 @@
+import { providerStateLabel } from '@shared/aiProviders'
 import { create } from 'zustand'
 import type {
   AiProvider,
@@ -1772,7 +1773,7 @@ export const useStore = create<State>((set, get) => ({
     if (!root) return
     const provider = providers.find((p) => p.id === settings.aiProvider)
     if (provider && !provider.available) {
-      get().notify(`${provider.label} is not installed — ${provider.hint}`, 'error')
+      get().notify(`${provider.label} ${providerStateLabel(provider)} — ${provider.hint}`, 'error')
       return
     }
 
@@ -1875,7 +1876,7 @@ export const useStore = create<State>((set, get) => ({
     const chosen = provider ?? settings.aiProvider
     const info = providers.find((p) => p.id === chosen)
     if (info && !info.available) {
-      get().notify(`${info.label} is not installed — ${info.hint}`, 'error')
+      get().notify(`${info.label} ${providerStateLabel(info)} — ${info.hint}`, 'error')
       return
     }
 

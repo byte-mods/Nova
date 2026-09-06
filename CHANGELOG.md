@@ -14,6 +14,35 @@ The steps for a release are in [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## 1.3.1
+
+### "Not installed" was said about a CLI that was installed
+
+A provider is unusable for two quite different reasons — its CLI is missing, or
+its CLI is sitting right there and has no API key — and every place in the UI
+said the same thing about both. Kimi, installed and detected at version 0.31.1,
+was reported as *not installed*, which sends someone off to install it again
+rather than to the key field two lines below.
+
+`providerState` now separates the two, using the resolved binary path that
+`ai:providers` already returns. The dropdown, the tab-bar menu, the console
+banner and the two notifications say "needs an API key" when that is what is
+actually wrong.
+
+### Windows had no search path of its own
+
+`toolEnv` rebuilds the PATH a GUI app does not inherit, and every directory in
+it was either under the home directory or a Unix absolute path — so on Windows
+the list contributed nothing, and a CLI was found only if the user had already
+put it on PATH by hand. It now also looks in `%APPDATA%\npm`, `WindowsApps`,
+`%ProgramFiles%\nodejs` and scoop's shims.
+
+Version strings for these CLIs come back for the first time here too. The probe
+ran through `execFile` on a `.cmd`, which failed for the same reason starting a
+run did, so every assistant showed a blank version whether or not it was found.
+
+---
+
 ## 1.3.0
 
 ### Every assistant was unreachable on Windows

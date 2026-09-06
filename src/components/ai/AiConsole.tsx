@@ -29,7 +29,7 @@ import PlanHistory from './PlanHistory'
 import { ChangeLine, CommandGroup } from './Activity'
 import { buildContextBlock } from '@/lib/aiContext'
 import { applyProgress, buildExecutePrompt, buildPlanPrompt, needsPlan, parsePlan } from '@/lib/planning'
-import { MODEL_TIERS, providerSpec } from '@shared/aiProviders'
+import { MODEL_TIERS, providerSpec, providerState } from '@shared/aiProviders'
 import {
   advance,
   beginAutoRun,
@@ -433,7 +433,12 @@ export default function AiConsole() {
         <div className="ai-warning">
           <TriangleAlert size={13} />
           <span>
-            <b>{provider.label} CLI not found.</b> {provider.hint}
+            <b>
+              {providerState(provider) === 'needs-key'
+                ? `${provider.label} needs an API key.`
+                : `${provider.label} CLI not found.`}
+            </b>{' '}
+            {provider.hint}
           </span>
         </div>
       )}

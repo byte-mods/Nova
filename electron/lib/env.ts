@@ -22,10 +22,22 @@ export function toolEnv(extra?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
     path.join(home, 'go', 'bin'),
     path.join(home, '.dotnet', 'tools'),
     path.join(home, 'flutter', 'bin'),
-    '/opt/homebrew/bin',
-    '/usr/local/bin',
-    '/usr/bin',
-    '/bin',
+    // Where Windows actually puts these. Every entry above either resolves
+    // under the home directory on any platform or is a Unix absolute path, so
+    // until these were added the Windows list was empty in practice and an
+    // assistant was found only if the user had put npm on PATH themselves.
+    ...(process.platform === 'win32'
+      ? [
+          path.join(process.env.APPDATA ?? path.join(home, 'AppData', 'Roaming'), 'npm'),
+          path.join(
+            process.env.LOCALAPPDATA ?? path.join(home, 'AppData', 'Local'),
+            'Microsoft',
+            'WindowsApps',
+          ),
+          path.join(process.env.ProgramFiles ?? 'C:\\Program Files', 'nodejs'),
+          path.join(home, 'scoop', 'shims'),
+        ]
+      : ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin']),
   ]
   const current = (process.env.PATH ?? '').split(path.delimiter).filter(Boolean)
   return {

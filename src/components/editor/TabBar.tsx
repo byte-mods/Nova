@@ -1,3 +1,4 @@
+import { providerStateLabel } from '@shared/aiProviders'
 import { useState } from 'react'
 import {
   BookOpen,
@@ -336,7 +337,7 @@ function TutorialButton() {
               id: `provider:${provider.id}`,
               label: provider.available
                 ? `Write it with ${provider.label}`
-                : `${provider.label} — not installed`,
+                : `${provider.label} — ${providerStateLabel(provider)}`,
               Icon: GraduationCap,
               onSelect: () => {
                 if (!provider.available) {

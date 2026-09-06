@@ -206,6 +206,29 @@ export function providerSpec(id: AiProvider): AiProviderSpec {
   return AI_PROVIDERS.find((p) => p.id === id) ?? AI_PROVIDERS[0]
 }
 
+/**
+ * Why a provider cannot be used yet.
+ *
+ * `available` is false for two quite different reasons, and saying the same
+ * thing about both is how someone ends up reinstalling a CLI they already have:
+ * the binary can be missing, or it can be sitting right there and unconfigured.
+ * `binary` is what tells them apart — it holds the resolved path whenever the
+ * CLI was found, whatever else is missing.
+ */
+export function providerState(info: {
+  available: boolean
+  binary?: string
+}): 'ready' | 'needs-key' | 'missing-cli' {
+  if (info.available) return 'ready'
+  return info.binary ? 'needs-key' : 'missing-cli'
+}
+
+/** The parenthetical a menu or a dropdown puts after the provider's name. */
+export function providerStateLabel(info: { available: boolean; binary?: string }): string {
+  const state = providerState(info)
+  return state === 'ready' ? '' : state === 'needs-key' ? 'needs an API key' : 'not installed'
+}
+
 /** Providers whose credential Nova stores, so Settings can ask for it. */
 export function keyedProviders(): AiProviderSpec[] {
   return AI_PROVIDERS.filter((p) => p.keyEnv)

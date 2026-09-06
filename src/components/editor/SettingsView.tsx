@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Check, RefreshCw, RotateCcw } from 'lucide-react'
 import type { AiProvider } from '@shared/types'
-import { keyedProviders } from '@shared/aiProviders'
+import { keyedProviders, providerStateLabel } from '@shared/aiProviders'
 import { useStore } from '@/state/store'
 import { themes } from '@/theme/themes'
 import { inspectionCatalogue } from '@/lib/inspections'
@@ -381,7 +381,7 @@ export default function SettingsView() {
               {providers.map((p) => (
                 <option key={p.id} value={p.id} disabled={!p.available}>
                   {p.label}
-                  {p.available ? '' : ' (not installed)'}
+                  {providerStateLabel(p) ? ` (${providerStateLabel(p)})` : ''}
                 </option>
               ))}
             </select>
