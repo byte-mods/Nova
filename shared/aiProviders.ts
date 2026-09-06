@@ -96,7 +96,7 @@ export const AI_PROVIDERS: AiProviderSpec[] = [
     label: 'Claude Code',
     binary: 'claude',
     dialect: 'claude',
-    // Aliases, which the CLI resolves to the current model of that name.
+    // Aliases first, which the CLI resolves to the current model of that name.
     models: [
       { id: 'haiku', label: 'Haiku', tier: 'fast' },
       { id: 'sonnet', label: 'Sonnet', tier: 'balanced' },
@@ -106,6 +106,15 @@ export const AI_PROVIDERS: AiProviderSpec[] = [
       // sat under `fast` — the tier this app describes as "answers soonest,
       // cheapest" — which promised a user the exact opposite of what they got.
       { id: 'fable', label: 'Fable', tier: 'deep' },
+      // Then the pinned ids behind those aliases. An alias follows whatever the
+      // vendor promotes, which is what you want day to day and not what you want
+      // when a result has to be reproducible, or when a new promotion changes an
+      // answer you were relying on. These carry no date suffix — the id is
+      // already complete, and appending one produces a model that does not exist.
+      { id: 'claude-haiku-4-5', label: 'Haiku 4.5', tier: 'fast' },
+      { id: 'claude-sonnet-5', label: 'Sonnet 5', tier: 'balanced' },
+      { id: 'claude-opus-5', label: 'Opus 5', tier: 'deep' },
+      { id: 'claude-fable-5-1', label: 'Fable 5.1', tier: 'deep' },
     ],
     // Straight from `claude --help`.
     efforts: ['low', 'medium', 'high', 'xhigh', 'max'],

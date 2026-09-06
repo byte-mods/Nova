@@ -15,6 +15,17 @@ import { BUILD, REPO, TMP } from './env.mjs'
 
 const exec = promisify(execFile)
 
+/**
+ * npm installs its tools as `.cmd` shims on Windows, and `execFile` neither
+ * finds `npx` without an extension nor is allowed to run the shim once it does
+ * — the same wall the app itself hit, which is why this ran nowhere on Windows.
+ * esbuild ships a real executable next to the shim, so use that directly.
+ */
+const ESBUILD =
+  process.platform === 'win32'
+    ? path.join(REPO, 'node_modules', '@esbuild', 'win32-x64', 'esbuild.exe')
+    : path.join(REPO, 'node_modules', '.bin', 'esbuild')
+
 const BUNDLES = [
   ['electron/lib/parseSymbols.ts', 'parseSymbols'],
   ['electron/lib/projectIndex.ts', 'projectIndex'],
@@ -63,6 +74,7 @@ const BUNDLES = [
   ['electron/lib/rpcFraming.ts', 'rpcFraming'],
   ['electron/lib/declarations.ts', 'declarations'],
   ['electron/lib/env.ts', 'env'],
+  ['electron/lib/spawnTool.ts', 'spawnTool'],
   ['electron/lib/localHistory.ts', 'localHistory'],
   ['electron/lib/geminiStream.ts', 'geminiStream'],
   ['src/lib/fileIcons.tsx', 'fileIcons'],
@@ -88,6 +100,7 @@ const OFFLINE = [
   'test-hardening',
   'test-providers',
   'test-icons',
+  'test-spawn',
   'test-tools',
 ]
 const TOOLS = ['test-lsp', 'test-hier', 'test-dap-py']
@@ -109,9 +122,8 @@ await symlink(path.join(REPO, 'node_modules'), path.join(BUILD, 'node_modules'),
 process.stdout.write(`building ${BUNDLES.length} modules → ${BUILD}\n`)
 for (const [src, out] of BUNDLES) {
   await exec(
-    'npx',
+    ESBUILD,
     [
-      'esbuild',
       src,
       '--bundle',
       '--format=esm',

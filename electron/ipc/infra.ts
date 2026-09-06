@@ -24,6 +24,7 @@ import type {
   ToolAvailability,
 } from '../../shared/infra'
 import { toolEnv, which } from '../lib/env'
+import { execTool } from '../lib/spawnTool'
 
 const exec = promisify(execFile)
 
@@ -33,7 +34,7 @@ const COMMAND_TIMEOUT_MS = 30_000
 async function run(binary: string, args: string[]): Promise<string> {
   const resolved = await which(binary)
   if (!resolved) throw new Error(`\`${binary}\` is not on PATH.`)
-  const { stdout } = await exec(resolved, args, {
+  const { stdout } = await execTool(resolved, args, {
     timeout: COMMAND_TIMEOUT_MS,
     maxBuffer: 32 * 1024 * 1024,
     env: toolEnv(),

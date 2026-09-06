@@ -4,6 +4,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import type { TestEvent, TestFrameworkInfo } from '../../shared/types'
 import { toolEnv } from '../lib/env'
+import { spawnTool } from '../lib/spawnTool'
 import {
   detectFrameworks,
   findTestDeclarations,
@@ -42,7 +43,8 @@ async function buildContext(root: string): Promise<FrameworkContext> {
 let current: ChildProcess | null = null
 
 function spawnRunner(command: string, args: string[], cwd: string) {
-  return spawn(command, args, {
+  // npm and most JS test runners are `.cmd` shims on Windows.
+  return spawnTool(command, args, {
     cwd,
     env: toolEnv({ NO_COLOR: '1', FORCE_COLOR: '0', CI: '1' }),
     stdio: ['ignore', 'pipe', 'pipe'],

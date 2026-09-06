@@ -23,6 +23,7 @@ import type {
   TableInfo,
 } from '../../shared/database'
 import { toolEnv, which } from '../lib/env'
+import { execTool, toolInvocation } from '../lib/spawnTool'
 import {
   readJsonFileOrQuarantine,
   StoreReadError,
@@ -115,7 +116,7 @@ export function registerDatabaseHandlers() {
       let version = ''
       if (binary) {
         try {
-          const { stdout } = await exec(binary, ['--version'], { timeout: 5000, env: toolEnv() })
+          const { stdout } = await execTool(binary, ['--version'], { timeout: 5000, env: toolEnv() })
           version = stdout.trim().split('\n')[0]
         } catch {
           version = ''
@@ -317,8 +318,12 @@ function execWithInput(
   input: string,
   options: { timeout: number; maxBuffer: number; env: NodeJS.ProcessEnv },
 ): Promise<{ stdout: string; stderr: string }> {
+  // Resolved by hand rather than through `execTool`, because the query is
+  // written to the client's stdin and that needs the child object back.
+  const call = toolInvocation(binary, args)
+  const opts = call.verbatim ? { ...options, windowsVerbatimArguments: true } : options
   return new Promise((resolve, reject) => {
-    const child = execFile(binary, args, options, (error, stdout, stderr) => {
+    const child = execFile(call.file, [...call.args], opts, (error, stdout, stderr) => {
       if (error) reject(Object.assign(error, { stdout, stderr }))
       else resolve({ stdout, stderr })
     })

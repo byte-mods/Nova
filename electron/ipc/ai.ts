@@ -18,6 +18,7 @@ import { buildGeminiArgs, translateGeminiEvent } from '../lib/geminiStream'
 import { AI_PROVIDERS, keyedProviders, providerSpec } from '../../shared/aiProviders'
 import { readAiKey, storedAiKeys, writeAiKey } from '../lib/aiCredentials'
 import { which } from '../lib/env'
+import { execTool, spawnTool } from '../lib/spawnTool'
 
 const exec = promisify(execFile)
 
@@ -69,7 +70,7 @@ function providerEnv(spec: { keyEnv?: string }, key: string): NodeJS.ProcessEnv 
 
 async function version(binary: string): Promise<string> {
   try {
-    const { stdout } = await exec(binary, ['--version'], { env: enrichedEnv(), timeout: 8000 })
+    const { stdout } = await execTool(binary, ['--version'], { env: enrichedEnv(), timeout: 8000 })
     return stdout.trim().split('\n')[0] ?? ''
   } catch {
     return ''
@@ -322,7 +323,9 @@ export function registerAiHandlers(ctx: Ctx) {
 
     // The prompt is passed as an argument, so the child must not wait on stdin —
     // `claude -p` otherwise stalls for seconds looking for piped input.
-    const child = spawn(binary, args, {
+    // `spawnTool` rather than `spawn`: on Windows every one of these CLIs is
+    // installed as a `.cmd` shim, which `spawn` refuses outright.
+    const child = spawnTool(binary, args, {
       cwd: req.cwd,
       env: providerEnv(spec, vendorKey),
       stdio: ['ignore', 'pipe', 'pipe'],

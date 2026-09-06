@@ -14,6 +14,56 @@ The steps for a release are in [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## 1.3.0
+
+### Every assistant was unreachable on Windows
+
+Asking any assistant to do anything on Windows produced
+`Error invoking remote method 'ai:start': Error: spawn EINVAL`, and then the
+console sat on its spinner and never came back. Both halves of that had the
+same cause.
+
+npm installs a command-line tool on Windows as a `.cmd` shim — `claude.cmd`,
+`codex.cmd`, `gemini.cmd` — and since the fix for CVE-2024-27980 Node will not
+execute one. `spawn` rejects it with `EINVAL`. It also *throws* rather than
+emitting `error`, which is why the spinner never stopped: the code that ends a
+run when its process fails is attached to the child, and the throw happened
+before there was a child to attach it to. A run that never started could never
+finish.
+
+Shims now go through `electron/lib/spawnTool.ts`, which prefers to read the
+shim and run the program it points at — an npm shim is a fixed shape, so the
+real executable can be lifted out of it and spawned with an ordinary argument
+array. Nothing re-parses anything on that path, so a prompt keeps its quotes,
+its ampersands and its line breaks.
+
+Where a shim cannot be read, it is handed to `cmd.exe` with every argument
+quoted for both of the parsers that will read it. What is emphatically not used
+is `shell: true`: Node joins arguments into one string without quoting any of
+them, and one of these arguments is the prompt — an `&` in a sentence would have
+ended the command and started another one. `tests/test-spawn.mjs` runs quotes,
+pipes, percent signs, carets, trailing backslashes and a canary injection
+through both paths and checks each argument arrives byte for byte.
+
+The same wall had been hit by everything else that runs an installed tool, so
+the database clients, the infrastructure commands and the test runner go through
+it too. `npm test` is `npm.cmd`; the test harness could not even build itself on
+Windows, because it shelled out to `npx`.
+
+### Pinned model ids for Claude
+
+The Claude entries were aliases — `opus`, `sonnet`, `haiku`, `fable` — which
+follow whatever the vendor currently promotes. That is right for daily use and
+wrong when a result has to be reproducible, or when a promotion quietly changes
+an answer you were relying on. The ids behind them are now offered alongside:
+`claude-opus-5`, `claude-sonnet-5`, `claude-haiku-4-5` and `claude-fable-5-1`.
+
+The other providers' suggestions are unchanged. The field takes anything typed
+into it and remembers what was used, so a model released tomorrow still works
+today without waiting for a release.
+
+---
+
 ## 1.2.3
 
 ### Keep going
