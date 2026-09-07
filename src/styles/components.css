@@ -803,6 +803,8 @@
 /* ============ AI console ============ */
 
 .ai-console {
+  /* See the note on .sidebar — the width is fitted to the window. */
+  width: var(--ai-width);
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -1080,6 +1082,15 @@
   gap: 7px;
   background: var(--title-bar);
   flex-shrink: 0;
+  /* A grid track will not go below its content's own minimum unless it is told
+     it may, and this one has to fit whatever width the panel has been squeezed
+     to. Without it the composer stayed 333px wide inside a 299px console and
+     the send button was painted past the edge, where nothing could reach it. */
+  min-width: 0;
+}
+
+.ai-composer > * {
+  min-width: 0;
 }
 
 .ai-composer textarea {
@@ -1088,12 +1099,18 @@
   line-height: 1.5;
   min-height: 62px;
   max-height: 220px;
+  /* Overriding the intrinsic `cols` width, which does not shrink on its own. */
+  width: 100%;
+  min-width: 0;
 }
 
+/* Wraps for the same reason the model row is a second row: a side panel is
+   narrow, and a control that does not fit is a control that is not there. */
 .ai-composer-actions {
   display: flex;
   align-items: center;
   gap: 6px;
+  flex-wrap: wrap;
 }
 
 .ai-attachments {

@@ -39,7 +39,6 @@ import {
 } from '@/lib/autoRun'
 
 export default function AiConsole() {
-  const width = useStore((s) => s.settings.aiWidth)
   const messages = useStore((s) => s.messages)
   const running = useStore((s) => s.aiRunning)
   const providers = useStore((s) => s.providers)
@@ -261,7 +260,7 @@ export default function AiConsole() {
   )
 
   return (
-    <div className="ai-console" style={{ width }}>
+    <div className="ai-console">
       <div className="ai-header">
         <Sparkles size={14} style={{ color: 'var(--accent)' }} />
         <span style={{ fontWeight: 600, fontSize: 12 }}>AI Console</span>

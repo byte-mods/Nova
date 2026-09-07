@@ -335,6 +335,9 @@ select:focus {
 /* ---------- sidebar ---------- */
 
 .sidebar {
+  /* Set by App from fitPanels, so a window narrower than the remembered width
+     shrinks the panel rather than pushing the editor off the screen. */
+  width: var(--sidebar-width);
   background: var(--sidebar);
   border-right: 1px solid var(--border);
   display: flex;

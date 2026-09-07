@@ -78,6 +78,7 @@ const BUNDLES = [
   ['electron/lib/localHistory.ts', 'localHistory'],
   ['electron/lib/geminiStream.ts', 'geminiStream'],
   ['src/lib/fileIcons.tsx', 'fileIcons'],
+  ['src/lib/panelLayout.ts', 'panelLayout'],
 ]
 
 const OFFLINE = [
@@ -101,6 +102,7 @@ const OFFLINE = [
   'test-providers',
   'test-icons',
   'test-spawn',
+  'test-layout',
   'test-tools',
 ]
 const TOOLS = ['test-lsp', 'test-hier', 'test-dap-py']

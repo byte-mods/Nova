@@ -14,6 +14,45 @@ The steps for a release are in [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## 1.3.4
+
+### The editor could be pushed off the screen
+
+The sidebar and the AI console each remember a width in pixels, and neither
+remembered width knew anything about the size of the window. Both panels are
+`flex-shrink: 0`, so once the two of them plus the activity bar came to more
+than the window was wide, nothing gave way: the editor between them collapsed
+to nothing and the overflow ran off the edge, where `.app-body`'s
+`overflow: hidden` clipped it. Drag the console wide on a large monitor, make
+the window narrow afterwards, and the editor was simply gone — with no scrollbar
+to bring it back.
+
+A stored width is now a preference rather than an instruction. `fitPanels`
+honours it whenever it fits, and when it does not the panels give up space — the
+one that asked for more giving up more, each stopping at the minimum its own
+splitter clamps to — before the editor is allowed to disappear. It is checked
+across every window size in `tests/test-layout.mjs`.
+
+### The send button was painted past the edge
+
+Fitting the panels was not enough on its own: the console's composer had a
+minimum of its own, 333px of controls that would not wrap inside a 299px panel,
+so the row still hung 43px past the window. The action row wraps now, for the
+same reason the model row is a second row — a side panel is narrow, and a
+control that does not fit is a control that is not there — and the grid track it
+sits in is allowed to shrink, which a grid track does not do by default.
+
+### Releases are built on GitHub
+
+`npm run dist` cannot complete on a Windows machine without Developer Mode:
+electron-builder's code-signing bundle contains macOS symlinks, and extracting
+it fails with "a required privilege is not held by the client". A runner has no
+such restriction, so `.github/workflows/release.yml` builds Windows, macOS and
+Linux on a version tag and attaches the installers to the release. Cutting a
+release no longer depends on anyone's local machine settings.
+
+---
+
 ## 1.3.3
 
 ### GPT-6 Astra

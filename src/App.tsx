@@ -1,5 +1,6 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useStore } from '@/state/store'
+import { fitPanels } from '@/lib/panelLayout'
 import TitleBar from '@/components/TitleBar'
 import ActivityBar from '@/components/ActivityBar'
 import Sidebar from '@/components/sidebar/Sidebar'
@@ -36,6 +37,15 @@ export default function App() {
     void init()
   }, [init])
 
+  // The panels are sized against the window, so a window narrower than the
+  // widths they remember shrinks them rather than pushing the editor off screen.
+  const [windowWidth, setWindowWidth] = useState(() => window.innerWidth)
+  useEffect(() => {
+    const onResize = () => setWindowWidth(window.innerWidth)
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
+
   useKeyboardShortcuts()
   useWatchers()
   useSharedAgent()
@@ -55,10 +65,30 @@ export default function App() {
     )
   }
 
+  // The activity bar and each splitter take their own space before the panels
+  // and the editor divide up what is left.
+  const ACTIVITY_BAR = 48
+  const SPLITTER = 4
+  const chrome =
+    ACTIVITY_BAR + (sidebarVisible ? SPLITTER : 0) + (aiVisible ? SPLITTER : 0)
+  const fitted = fitPanels({
+    available: windowWidth - chrome,
+    sidebar: sidebarVisible ? settings.sidebarWidth : null,
+    ai: aiVisible ? settings.aiWidth : null,
+  })
+
   return (
     <div className="app">
       <TitleBar />
-      <div className="app-body">
+      <div
+        className="app-body"
+        style={
+          {
+            '--sidebar-width': `${fitted.sidebar}px`,
+            '--ai-width': `${fitted.ai}px`,
+          } as React.CSSProperties
+        }
+      >
         <ActivityBar />
         {sidebarVisible && (
           <>

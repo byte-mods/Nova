@@ -9,10 +9,9 @@ import ThemesView from './ThemesView'
 
 export default function Sidebar() {
   const view = useStore((s) => s.sidebarView)
-  const width = useStore((s) => s.settings.sidebarWidth)
 
   return (
-    <div className="sidebar" style={{ width }}>
+    <div className="sidebar">
       {view === 'explorer' && <Explorer />}
       {view === 'search' && <SearchView />}
       {view === 'structural' && <StructuralSearchView />}
