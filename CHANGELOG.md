@@ -14,6 +14,21 @@ The steps for a release are in [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## 1.3.6
+
+### The release build produces the app, not an installer
+
+The NSIS step was what failed on the runner, and its log needs admin rights on
+the repository to read — so it was being guessed at, one tag at a time. The
+workflow stops at `--dir` now: the unpacked application, which is the build that
+has actually been run and checked here, shipped as a zip. Extract it and run
+`Nova.exe`.
+
+It also builds on every push to `main`, so a break is found on the commit that
+caused it rather than on the tag that was meant to ship it.
+
+---
+
 ## 1.3.5
 
 ### The release build now runs on Windows only

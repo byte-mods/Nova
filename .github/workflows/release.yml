@@ -63,13 +63,28 @@ jobs:
         run: npm run test:offline
 
       - name: Build the app
-        # `--dir` stops at the unpacked application, which is the step that has
+        # `--dir` stops at the unpacked application, which is the build that has
         # actually been run and checked by hand. Unsigned, because there is no
         # certificate here and a build that says so beats one that fails looking
         # for one.
+        #
+        # electron-builder's exit code is not the question being asked. It ends
+        # non-zero when a post-processing step fails — extracting the bundle that
+        # holds `rcedit` needs permission to create symlinks, and that is exactly
+        # what a machine without Developer Mode refuses — and it has already
+        # written a complete application by then. So what is checked is whether
+        # an app came out, and then, in the next step, whether it is Nova's.
+        shell: pwsh
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-        run: npx electron-builder --win --dir --publish never
+        run: |
+          npx electron-builder --win --dir --publish never
+          $builder = $LASTEXITCODE
+          if (-not (Test-Path release/win-unpacked/Nova.exe)) {
+            throw "electron-builder exited $builder and produced no application"
+          }
+          Write-Output "electron-builder exited $builder; the application was produced"
+          exit 0
 
       - name: Check the build carries Nova's own identity
         # The whole reason this workflow exists. `rcedit` lives inside a bundle
