@@ -14,6 +14,24 @@ The steps for a release are in [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## 1.3.7
+
+### Windows builds are stamped with Nova's own identity
+
+electron-builder does this itself, with a copy of `rcedit` that lives inside its
+code-signing bundle — and that bundle holds macOS symlinks, so extracting it
+fails on any Windows machine without permission to create them. Neither this
+laptop nor a GitHub runner has that permission, and the failure is quiet in the
+worst way: the build succeeds, the app works, and the executable keeps
+Electron's name, version and icon. That is how two Novas ended up in the Start
+menu with nothing to say which was which.
+
+`scripts/stamp-windows.mjs` does it with `rcedit` as an ordinary dependency that
+needs no extraction, and the release build now fails outright if the executable
+still calls itself Electron.
+
+---
+
 ## 1.3.6
 
 ### The release build produces the app, not an installer
