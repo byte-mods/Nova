@@ -86,6 +86,12 @@ jobs:
           Write-Output "electron-builder exited $builder; the application was produced"
           exit 0
 
+      - name: Stamp the app with Nova's name, version and icon
+        # electron-builder's own copy of rcedit could not be extracted, here or
+        # on a developer's machine, so this does it with rcedit as an ordinary
+        # dependency. Without it the executable keeps Electron's identity.
+        run: node scripts/stamp-windows.mjs
+
       - name: Check the build carries Nova's own identity
         # The whole reason this workflow exists. `rcedit` lives inside a bundle
         # that will not extract without permission to create symlinks, and when

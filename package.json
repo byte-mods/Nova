@@ -2,7 +2,7 @@
   "name": "nova-ide",
   "version": "1.3.6",
   "private": true,
-  "description": "Nova IDE \u2014 a full-featured desktop IDE with a built-in Chromium browser, diagram designer, git integration and an AI console powered by the Claude and Codex CLIs.",
+  "description": "Nova IDE — a full-featured desktop IDE with a built-in Chromium browser, diagram designer, git integration and an AI console powered by the Claude and Codex CLIs.",
   "author": "Nova IDE",
   "license": "Apache-2.0",
   "repository": {
@@ -58,6 +58,7 @@
     "@vitejs/plugin-react": "^4.3.1",
     "electron": "^43.3.0",
     "electron-builder": "^24.13.3",
+    "rcedit": "^5.0.2",
     "typescript": "^5.5.4",
     "vite": "^5.4.0",
     "vite-plugin-electron": "^0.28.7",
