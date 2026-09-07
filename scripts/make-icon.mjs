@@ -57,6 +57,14 @@ function starValue(x, y, reach) {
 
 /* ---------------- render ---------------- */
 
+/**
+ * The mark, drawn at whatever size is asked for.
+ *
+ * Every measurement below is a fraction of the side, so this is a redraw rather
+ * than a resample — which is what a 16px Windows tab icon needs; scaling a
+ * 1024px plate down to it turns the star into grey mush.
+ */
+function render(SIZE) {
 const pixels = Buffer.alloc(SIZE * SIZE * 4)
 const half = SIZE / 2
 const plateHalf = SIZE * 0.5
@@ -109,6 +117,10 @@ for (let py = 0; py < SIZE; py++) {
     pixels[i + 3] = Math.round(cov)
   }
 }
+  return pixels
+}
+
+const pixels = render(SIZE)
 
 /* ---------------- PNG encoding ---------------- */
 
@@ -160,6 +172,47 @@ mkdirSync(OUT, { recursive: true })
 const pngPath = path.join(OUT, 'icon.png')
 writeFileSync(pngPath, encodePng(SIZE, SIZE, pixels))
 process.stdout.write(`wrote ${path.relative(ROOT, pngPath)} (${SIZE}x${SIZE})\n`)
+
+/* ---------------- .ico, for Windows ---------------- */
+
+/**
+ * Written here rather than left to electron-builder's PNG conversion, which is
+ * what the app had been relying on — and when it does not happen the installed
+ * app carries Electron's own icon, which is how you end up with two Novas in
+ * the Start menu and no way to tell which one you are opening.
+ *
+ * An .ico is a small directory followed by its images. Every entry here is a
+ * PNG, which Vista and later read directly, so the same encoder above does the
+ * work. 256 is written as 0 in the directory, the field being one byte.
+ */
+function encodeIco(sizes) {
+  const images = sizes.map((size) => encodePng(size, size, render(size)))
+  const header = Buffer.alloc(6)
+  header.writeUInt16LE(0, 0) // reserved
+  header.writeUInt16LE(1, 2) // 1 = icon
+  header.writeUInt16LE(sizes.length, 4)
+
+  let offset = 6 + sizes.length * 16
+  const entries = sizes.map((size, i) => {
+    const entry = Buffer.alloc(16)
+    entry.writeUInt8(size >= 256 ? 0 : size, 0)
+    entry.writeUInt8(size >= 256 ? 0 : size, 1)
+    entry.writeUInt8(0, 2) // palette colours
+    entry.writeUInt8(0, 3) // reserved
+    entry.writeUInt16LE(1, 4) // colour planes
+    entry.writeUInt16LE(32, 6) // bits per pixel
+    entry.writeUInt32LE(images[i].length, 8)
+    entry.writeUInt32LE(offset, 12)
+    offset += images[i].length
+    return entry
+  })
+
+  return Buffer.concat([header, ...entries, ...images])
+}
+
+const icoPath = path.join(OUT, 'icon.ico')
+writeFileSync(icoPath, encodeIco([16, 24, 32, 48, 64, 128, 256]))
+process.stdout.write(`wrote ${path.relative(ROOT, icoPath)} (16–256px)\n`)
 
 /* ---------------- .icns, via the macOS toolchain ---------------- */
 

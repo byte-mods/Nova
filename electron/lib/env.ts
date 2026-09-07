@@ -43,8 +43,64 @@ export function toolEnv(extra?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return {
     ...process.env,
     ...extra,
-    PATH: [...new Set([...current, ...candidates])].join(path.delimiter),
+    PATH: [...new Set([...current, ...persistentPath, ...candidates])].join(path.delimiter),
   }
+}
+
+/**
+ * The PATH Windows stores rather than the one this process happens to hold.
+ *
+ * A process inherits its environment from whatever started it, and on Windows
+ * that is usually Explorer — which read the environment when it started and does
+ * not necessarily re-read it. Install a CLI, and a terminal opened afterwards
+ * finds it while an app launched from the Start menu does not: the tool is on
+ * the PATH the user edited and not on the one the app was handed. "It works in
+ * cmd but Nova says it is not installed" is exactly that gap.
+ *
+ * Unix already has an answer here — the login-shell fallback further down, which
+ * re-runs the user's profile. This is the same idea for Windows: ask the
+ * registry, which is where the durable PATH actually lives.
+ */
+let persistentPath: string[] = []
+let persistentPathLoaded: Promise<void> | null = null
+
+function expandWindowsVars(value: string): string {
+  return value.replace(/%([^%]+)%/g, (whole, name: string) => {
+    const found = Object.entries(process.env).find(
+      ([key]) => key.toLowerCase() === String(name).toLowerCase(),
+    )
+    return found?.[1] ?? whole
+  })
+}
+
+async function readRegistryPath(key: string): Promise<string[]> {
+  try {
+    // Addressed absolutely rather than by name: the reason this function exists
+    // is that PATH cannot be trusted, and looking `reg` up on it would be
+    // relying on the very thing being repaired. Arguments are fixed, so nothing
+    // here is built out of anything a user typed.
+    const reg = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'reg.exe')
+    const { stdout } = await exec(reg, ['query', key, '/v', 'Path'], { timeout: 5000 })
+    // REG_EXPAND_SZ    C:\one;C:\two
+    const match = /\bPath\s+REG_(?:EXPAND_)?SZ\s+(.*)/i.exec(stdout)
+    if (!match) return []
+    return expandWindowsVars(match[1].trim()).split(';').filter(Boolean)
+  } catch {
+    return []
+  }
+}
+
+/** Reads the durable PATH once. Safe to call repeatedly; only the first reads. */
+export function loadPersistentPath(): Promise<void> {
+  if (process.platform !== 'win32') return Promise.resolve()
+  persistentPathLoaded ??= (async () => {
+    const [user, machine] = await Promise.all([
+      readRegistryPath('HKCU\\Environment'),
+      readRegistryPath('HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment'),
+    ])
+    persistentPath = [...new Set([...user, ...machine])]
+  })()
+  return persistentPathLoaded
 }
 
 /**
@@ -53,6 +109,9 @@ export function toolEnv(extra?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
  * login shell so version-manager shims (nvm, rbenv, pyenv) still resolve.
  */
 export async function which(binary: string): Promise<string> {
+  // Every tool discovery comes through here, so this is the one place that has
+  // to know the durable PATH has been read. It is read once and then cached.
+  await loadPersistentPath()
   const env = toolEnv()
   const windows = process.platform === 'win32'
 

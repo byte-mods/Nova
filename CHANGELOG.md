@@ -14,6 +14,37 @@ The steps for a release are in [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## 1.3.2
+
+### Works in cmd, "not installed" in Nova
+
+A process inherits its environment from whatever launched it, and on Windows
+that is usually Explorer — which read the environment when it started and does
+not re-read it. Install a CLI and the terminal you open afterwards finds it,
+while an app started from the Start menu does not: the tool is on the PATH you
+edited, and not on the one the app was handed. That is the whole of "`claude` is
+right there in cmd and Nova says it cannot find it".
+
+Unix already had an answer — the login-shell fallback in `which`, which re-runs
+the user's profile. Windows had nothing equivalent, so `toolEnv` now reads the
+durable PATH out of the registry (`HKCU\Environment` and the machine
+equivalent), expands any `%VAR%` in it, and merges it in. It is read once and
+cached; resolving all three assistants from a stripped PATH takes 57ms.
+
+`reg.exe` is addressed by absolute path, because looking it up on PATH would
+mean depending on the thing being repaired.
+
+### The installed app wore Electron's icon
+
+`win.icon` pointed at a PNG and left the conversion to electron-builder. When
+that does not happen the installed app carries Electron's own icon — which is
+how someone ends up with two Novas in the Start menu and no way to tell which
+one they are about to open. `scripts/make-icon.mjs` now emits a real
+`build/icon.ico` with every size from 16 to 256, each one drawn at its own size
+rather than resampled down from 1024, and the Windows build points at that.
+
+---
+
 ## 1.3.1
 
 ### "Not installed" was said about a CLI that was installed
