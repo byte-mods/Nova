@@ -14,6 +14,24 @@ The steps for a release are in [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## 1.3.5
+
+### The release build now runs on Windows only
+
+The first run of the release workflow failed on all three platforms: macOS and
+Linux in the build itself, and Windows on the test step, which had been gating
+the release on two suites that fail there for reasons unrelated to the build and
+failed identically before any of these changes. The suites are still run and
+still reported; they no longer decide whether a release exists. macOS and Linux
+are gone until someone on those platforms can confirm a build, because
+publishing an installer nobody has run is worse than publishing none.
+
+The workflow now also asserts that the built `Nova.exe` calls itself Nova. That
+is the one failure this is all here to prevent, and it is invisible otherwise —
+a build with `rcedit` skipped succeeds and ships as "Electron".
+
+---
+
 ## 1.3.4
 
 ### The editor could be pushed off the screen
