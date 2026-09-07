@@ -14,6 +14,34 @@ The steps for a release are in [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## 1.3.3
+
+### GPT-6 Astra
+
+Astra shipped on 3 September and Nova did not list it. It is the generation
+above the 5.6 line and the Codex CLI's own bundled default from 0.153.4, so
+Codex was already running it while Nova's own suggestions still stopped at Sol.
+It is in the list now and is the placeholder Settings shows.
+
+Sol stays where it is rather than being replaced. Entitlement to Astra varies by
+account, and a list offering only a model someone cannot reach is worse than one
+offering both.
+
+### A test file Nova could not open
+
+`tests/test-spawn.mjs` checks that a path containing a NUL byte is rejected, and
+wrote that byte into the source **as a byte** rather than as `\0`. The string is
+identical to the parser and the test passed either way, but the file was binary
+to everything else: git diffed it as `Bin`, grep skipped it, and Nova's own file
+reader refused to open it as text.
+
+This is the third instance of the same mistake — the first two were found by the
+audit in 1.2.2, in `httpAuth.ts` and `structural.ts`. Writing the escape rather
+than the byte costs nothing and keeps the file readable by the editor it was
+written for.
+
+---
+
 ## 1.3.2
 
 ### Works in cmd, "not installed" in Nova

@@ -19,7 +19,7 @@
  * both emit the same JSONL event shapes, so they share a reader.
  *
  * **The model ids below are suggestions, checked against each vendor's own
- * documentation in August 2026, and they will go out of date.** That is not a
+ * documentation in September 2026, and they will go out of date.** That is not a
  * flaw to be fixed by checking harder: vendors ship models faster than an
  * editor ships releases. The field these populate accepts anything typed into
  * it, and remembers what has actually been used, so a model released tomorrow
@@ -125,11 +125,18 @@ export const AI_PROVIDERS: AiProviderSpec[] = [
     label: 'Codex',
     binary: 'codex',
     dialect: 'codex',
+    defaultModel: 'gpt-6-astra',
     models: [
       { id: 'gpt-5.6-luna', label: 'GPT-5.6 Luna', tier: 'fast' },
       { id: 'gpt-5.3-codex', label: 'GPT-5.3 Codex', tier: 'balanced' },
       { id: 'gpt-5.6-terra', label: 'GPT-5.6 Terra', tier: 'balanced' },
       { id: 'gpt-5.6-sol', label: 'GPT-5.6 Sol', tier: 'deep' },
+      // Astra is the generation above the 5.6 line and the CLI's own bundled
+      // default from 0.153.4, so it is what Codex runs when nothing is set.
+      // Sol stays listed as the stable fallback rather than being replaced —
+      // entitlement to Astra varies by account, and a list that offers only a
+      // model someone cannot reach is worse than one that offers both.
+      { id: 'gpt-6-astra', label: 'GPT-6 Astra', tier: 'deep' },
     ],
     // `codex exec` takes this straight through as a config override.
     efforts: ['low', 'medium', 'high'],

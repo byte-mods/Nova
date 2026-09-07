@@ -393,7 +393,7 @@ export default function SettingsView() {
               placeholder={
                 settings.aiProvider === 'opencode'
                   ? 'e.g. qwen2.5-coder:0.5b — or provider/model'
-                  : 'e.g. opus, sonnet, gpt-5.3-codex'
+                  : 'e.g. opus, fable, gpt-6-astra'
               }
               onChange={(e) => setSettings({ aiModel: e.target.value })}
             />
