@@ -25,6 +25,10 @@ on:
   push:
     tags:
       - 'v*'
+    # Also on main, so a break in the build is found on the commit that caused
+    # it rather than on the tag that was supposed to ship it.
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
@@ -58,32 +62,41 @@ jobs:
         continue-on-error: true
         run: npm run test:offline
 
-      - name: Build
-        # Unsigned: there is no certificate in this repository, and a build that
-        # says so is better than one that fails looking for one.
+      - name: Build the app
+        # `--dir` stops at the unpacked application, which is the step that has
+        # actually been run and checked by hand. Unsigned, because there is no
+        # certificate here and a build that says so beats one that fails looking
+        # for one.
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-        run: npx electron-builder --win --publish never
+        run: npx electron-builder --win --dir --publish never
 
-      - name: Check the installer carries Nova's own identity
-        # The whole reason this workflow exists. If `rcedit` were skipped here
-        # too, the build would look fine and ship as "Electron" again.
+      - name: Check the build carries Nova's own identity
+        # The whole reason this workflow exists. `rcedit` lives inside a bundle
+        # that will not extract without permission to create symlinks, and when
+        # it is skipped the build still succeeds - and ships as "Electron", with
+        # Electron's icon. Failing loudly here is the point.
         shell: pwsh
         run: |
-          $exe = Get-ChildItem release\win-unpacked\Nova.exe
+          $exe = Get-Item release/win-unpacked/Nova.exe
           $name = $exe.VersionInfo.ProductName
-          $version = $exe.VersionInfo.ProductVersion
-          Write-Output "ProductName=$name ProductVersion=$version"
-          if ($name -ne 'Nova') { throw "Nova.exe reports ProductName '$name' — rcedit did not run" }
+          Write-Output "ProductName=$name ProductVersion=$($exe.VersionInfo.ProductVersion)"
+          if ($name -ne 'Nova') { throw "Nova.exe reports ProductName '$name' - rcedit did not run" }
+
+      - name: Package it
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json | ConvertFrom-Json).version
+          Compress-Archive -Path release/win-unpacked/* -DestinationPath "release/Nova-$version-win-x64.zip"
+          Get-ChildItem release/*.zip | Select-Object Name, Length
 
       - uses: actions/upload-artifact@v4
         with:
           name: nova-windows
           if-no-files-found: error
           path: |
+            release/*.zip
             release/*.exe
-            release/*.blockmap
-            release/latest.yml
 
   publish:
     # Only a tag makes a release; a manual run just leaves the artefact above.
