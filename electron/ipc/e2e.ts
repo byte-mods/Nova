@@ -122,7 +122,7 @@ function screencastFrame(contents: Electron.WebContents): Promise<Buffer | null>
  * to the user exactly like the feature being broken, and "could not capture"
  * is at least actionable.
  */
-async function capture(contentsId: number): Promise<Buffer | null> {
+export async function capture(contentsId: number): Promise<Buffer | null> {
   const contents = webContents.fromId(contentsId)
   if (!contents || contents.isDestroyed()) return null
 

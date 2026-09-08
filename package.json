@@ -1,6 +1,6 @@
 {
   "name": "nova-ide",
-  "version": "1.3.7",
+  "version": "1.4.0",
   "private": true,
   "description": "Nova IDE — a full-featured desktop IDE with a built-in Chromium browser, diagram designer, git integration and an AI console powered by the Claude and Codex CLIs.",
   "author": "Nova IDE",

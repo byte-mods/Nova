@@ -16,6 +16,17 @@ interface Ctx {
 /** The open project, used to scope local history. */
 let projectRoot = ''
 
+/**
+ * The project the window currently has open.
+ *
+ * Read by anything that needs to scope itself to the project without being
+ * handed a root — the review bridge, whose caller is the assistant's CLI and
+ * has no idea what is open.
+ */
+export function openProjectRoot(): string {
+  return projectRoot
+}
+
 const MIME: Record<string, string> = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',

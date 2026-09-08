@@ -1110,7 +1110,30 @@
   display: flex;
   align-items: center;
   gap: 6px;
+  /* The console is a side panel the user can drag narrow, and this row has
+     grown a control at a time — attach, permission mode, Plan first, Keep
+     going, Send. Without wrapping, the last of them (Stop, the one you need
+     most while a run is going) was pushed past the panel's edge. */
   flex-wrap: wrap;
+  row-gap: 4px;
+}
+
+/* The filename is the only part that can give: everything else in the row is
+   a control whose label is the whole point of it. */
+.ai-composer-actions .btn.ghost {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Send and Stop stay on the right and never shrink. Pinned with `margin-left`
+   rather than by a flexible spacer, which competes with wrapping and strands
+   the button on a line of its own. */
+.ai-composer-actions > .btn.primary,
+.ai-composer-actions > .btn.sm:last-child {
+  flex-shrink: 0;
+  margin-left: auto;
 }
 
 .ai-attachments {

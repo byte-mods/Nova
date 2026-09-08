@@ -24,6 +24,24 @@ function copyPluginHost(): Plugin {
   }
 }
 
+/**
+ * The review MCP server is spawned by the assistant's CLI, so like the plugin
+ * host it has to exist as a real file rather than be bundled into `main.js`.
+ */
+function copyMcpServers(): Plugin {
+  const copy = () => {
+    const from = fileURLToPath(new URL('./electron/mcp/nova-review.mjs', import.meta.url))
+    const toDir = fileURLToPath(new URL('./dist-electron/mcp', import.meta.url))
+    mkdirSync(toDir, { recursive: true })
+    copyFileSync(from, `${toDir}/nova-review.mjs`)
+  }
+  return {
+    name: 'nova:copy-mcp-servers',
+    buildStart: copy,
+    configureServer: copy,
+  }
+}
+
 export default defineConfig({
   resolve: {
     alias: {
@@ -34,6 +52,7 @@ export default defineConfig({
   plugins: [
     react(),
     copyPluginHost(),
+    copyMcpServers(),
     electron({
       main: {
         entry: 'electron/main.ts',
