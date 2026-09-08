@@ -29,6 +29,7 @@ import type {
 import { applyTheme, defaultThemeId, getTheme } from '@/theme/themes'
 import { basename } from '@/lib/paths'
 import { languageForPath } from '@/lib/language'
+import { settleMessages } from '@/lib/chatMessages'
 
 /** Console lines kept from the browser pane, for the assistant to read back. */
 const MAX_BROWSER_CONSOLE = 300
@@ -2120,7 +2121,7 @@ export const useStore = create<State>((set, get) => ({
 
     set({
       activeChatId: id,
-      messages: (stored.messages as AiMessage[]) ?? [],
+      messages: settleMessages((stored.messages as AiMessage[]) ?? []),
       plan: stored.plan ?? null,
       plans,
       aiSessionId: {
@@ -2177,6 +2178,8 @@ export const useStore = create<State>((set, get) => ({
   async persistChat() {
     const { root, activeChatId, messages, plan, aiSessionId, chats } = get()
     if (!root || !activeChatId) return
+    // A stored message is a transcript, not a run. See `settleMessages`.
+    const settled = settleMessages(messages)
 
     const existing = chats.find((c) => c.id === activeChatId)
     const firstUser = messages.find((m) => m.role === 'user')
@@ -2191,7 +2194,7 @@ export const useStore = create<State>((set, get) => ({
     const stored: StoredChat = {
       id: activeChatId,
       title,
-      messages,
+      messages: settled,
       sessionIds: { claude: aiSessionId.claude, codex: aiSessionId.codex },
       plan: plan ?? undefined,
       plans: get().plans,

@@ -276,6 +276,16 @@ export default function AiConsole() {
     // best-effort; leaving the composer disabled because a `done` never came
     // back is the failure this is here to prevent.
     useStore.setState({ activeRunId: null, aiRunning: false })
+
+    // And clear the message's own spinner, for the same reason and separately.
+    // Killing the child usually produces a `done` — but "usually" is what
+    // leaves a stopped turn spinning for the rest of the session: the composer
+    // is free, the message still says it is working, and nothing is coming back
+    // to say otherwise.
+    if (runId) {
+      const message = useStore.getState().messages.find((m) => m.runId === runId)
+      if (message) useStore.getState().patchMessage(message.id, (m) => ({ ...m, running: false }))
+    }
   }
 
   const suggestions = useMemo(

@@ -14,6 +14,33 @@ The steps for a release are in [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## 1.4.1
+
+### A spinner that never stopped
+
+A conversation reopened with the assistant apparently still working: the loader
+turning next to *Claude*, forever, on a turn that had finished long ago.
+
+The cause was a good change with an unhandled consequence. Saving used to happen
+only when a turn completed, so a stored message was always a finished one.
+Saving as messages arrive — which is what stops a crashed CLI taking the whole
+transcript with it — made a half-finished turn something that could be written
+to disk, and `running: true` went to disk with it. Reopening the chat restored a
+message claiming to belong to a run that had ended with the window that started
+it, and nothing was ever coming back to say otherwise.
+
+`running` and `runId` describe a run happening *now*. They are stripped when a
+chat is written and again when one is read — the second because chats saved
+before this fix already have the flag on disk, and they should stop spinning
+without anyone having to delete them.
+
+**Stop had the same hole.** Killing the child usually produces a completion
+event, and "usually" is what left a stopped turn spinning for the rest of the
+session: the composer was released, the message still said it was working. Stop
+now clears the message's own spinner rather than trusting the event to arrive.
+
+---
+
 ## 1.4.0
 
 ### The assistant can look at the app it is changing
