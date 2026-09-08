@@ -257,6 +257,16 @@ const api = {
       ipcRenderer.invoke('ai:setKey', provider, key),
     start: (req: AiStartRequest): Promise<{ runId: string }> => ipcRenderer.invoke('ai:start', req),
     ack: (runId: string): Promise<void> => ipcRenderer.invoke('ai:ack', runId),
+    /** Saves a pasted image into the project and returns its path. */
+    attachImage: (root: string, dataUrl: string): Promise<string | null> =>
+      ipcRenderer.invoke('ai:attachImage', root, dataUrl),
+    /**
+     * Requests from the assistant's review tools that only the renderer can
+     * answer — anything touching the browser pane, which lives here.
+     */
+    onReviewRequest: (cb: (e: unknown) => void) => on('review:request', cb),
+    reviewReply: (id: string, result: unknown, error?: string): Promise<void> =>
+      ipcRenderer.invoke('review:reply', id, result, error),
     cancel: (runId: string): Promise<void> => ipcRenderer.invoke('ai:cancel', runId),
     onEvent: (cb: (e: unknown) => void) => on('ai:event', cb),
   },

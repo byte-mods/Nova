@@ -182,6 +182,38 @@ export default function AiConsole() {
     await startRun(prompt, 'chat')
   }
 
+  /**
+   * Takes images off the clipboard and attaches them.
+   *
+   * A screenshot is the fastest way to describe a layout bug, and until now the
+   * only way to show one was to save it somewhere by hand and then type the
+   * path. The assistants read images from paths rather than from bytes, so the
+   * paste is written into the project and attached like any other file.
+   *
+   * Text pastes are left completely alone — `preventDefault` is called only
+   * when there is at least one image, so pasting a stack trace still behaves
+   * the way pasting a stack trace should.
+   */
+  const pasteImages = async (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    if (!root) return
+    const files = Array.from(event.clipboardData.files).filter((f) => f.type.startsWith('image/'))
+    if (!files.length) return
+
+    event.preventDefault()
+    for (const file of files) {
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => resolve(String(reader.result))
+        reader.onerror = () => reject(reader.error)
+        reader.readAsDataURL(file)
+      }).catch(() => '')
+      if (!dataUrl) continue
+
+      const saved = await window.nova.ai.attachImage(root, dataUrl)
+      if (saved) setAttachments((a) => (a.includes(saved) ? a : [...a, saved]))
+    }
+  }
+
   const send = async () => {
     const prompt = input.trim()
     if (!prompt || running || !root) return
@@ -524,6 +556,7 @@ export default function AiConsole() {
               void send()
             }
           }}
+          onPaste={(e) => void pasteImages(e)}
         />
 
         <div className="ai-composer-actions">
@@ -586,8 +619,9 @@ export default function AiConsole() {
             Keep going
           </label>
 
-          <span style={{ flex: 1 }} />
-
+          {/* Send and Stop are pushed right by `margin-left: auto` in the
+              stylesheet rather than by a flexible spacer — a spacer competes
+              with wrapping and strands the button on a line of its own. */}
           {running ? (
             <button className="btn sm" onClick={stop}>
               <CircleStop size={12} /> Stop

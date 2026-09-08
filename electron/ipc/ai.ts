@@ -29,6 +29,13 @@ interface Ctx {
    * console still works in tests that register it without a plugin host.
    */
   mcpServers?: () => Promise<ResolvedMcpServer[]>
+  /**
+   * Nova's own review tools, as one more MCP server.
+   *
+   * Optional for the same reason as the above — the console has to keep working
+   * in a test harness that never starts a browser pane.
+   */
+  reviewServer?: () => Promise<ResolvedMcpServer | null>
 }
 
 /** GUI apps do not inherit a login shell PATH, so rebuild the usual dev locations. */
@@ -122,6 +129,11 @@ const pending = new Map<string, Run>()
 const unstarted = new Map<string, AiEvent[]>()
 
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'str_replace_editor'])
+
+/** A screenshot, not a video. Anything larger is a paste that went wrong. */
+const MAX_PASTED_IMAGE_BYTES = 20 * 1024 * 1024
+/** How many pasted images to keep before the oldest are dropped. */
+const MAX_PASTED_IMAGES = 20
 
 function countLineDelta(before: string, after: string) {
   const a = before ? before.split('\n') : []
@@ -305,6 +317,12 @@ export function registerAiHandlers(ctx: Ctx) {
     // Enabled plugins can hand the assistant extra tools. Resolved per run so
     // that enabling a plugin takes effect on the very next prompt.
     const mcp = (await ctx.mcpServers?.()) ?? []
+
+    // Nova's own tools go in alongside them, so the assistant can open the app
+    // it is editing, look at it and read its console rather than guessing what
+    // its change did. Added last, so a plugin cannot displace it by name.
+    const review = await ctx.reviewServer?.()
+    if (review) mcp.push(review)
     // Dialect, not provider id — Gemini and Kimi ship different binaries that
     // speak the same JSONL, so they share both the arguments and the reader.
     const args =
@@ -419,6 +437,48 @@ export function registerAiHandlers(ctx: Ctx) {
   })
 
   /** The renderer calls this once it can attribute events to a message. */
+  /**
+   * Writes a pasted image into the project so the assistant can read it.
+   *
+   * The CLIs take images as file paths, not as bytes on stdin, so a screenshot
+   * on the clipboard has to become a file somewhere before it can be talked
+   * about. `.nova/pasted/` inside the project rather than a temp directory:
+   * the assistant runs with the project as its working directory, and a path
+   * under it is one the agent can read without an argument about scope.
+   *
+   * The directory is capped, because a pasted screenshot is almost always worth
+   * one conversation and never worth a permanent copy.
+   */
+  ipcMain.handle(
+    'ai:attachImage',
+    async (_e, root: string, dataUrl: string): Promise<string | null> => {
+      if (typeof root !== 'string' || !root) return null
+      if (typeof dataUrl !== 'string') return null
+
+      const match = /^data:image\/(png|jpeg|jpg|gif|webp);base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl)
+      if (!match) return null
+
+      const extension = match[1] === 'jpeg' ? 'jpg' : match[1]
+      const bytes = Buffer.from(match[2], 'base64')
+      if (!bytes.length || bytes.length > MAX_PASTED_IMAGE_BYTES) return null
+
+      const dir = path.join(root, '.nova', 'pasted')
+      await fs.mkdir(dir, { recursive: true })
+
+      const file = path.join(dir, `paste-${Date.now()}.${extension}`)
+      await fs.writeFile(file, bytes)
+
+      // Oldest first, so slicing off the front drops the ones nobody is
+      // talking about any more.
+      const kept = (await fs.readdir(dir).catch(() => [])).filter((n) => n.startsWith('paste-')).sort()
+      for (const stale of kept.slice(0, Math.max(0, kept.length - MAX_PASTED_IMAGES))) {
+        await fs.rm(path.join(dir, stale), { force: true }).catch(() => undefined)
+      }
+
+      return file
+    },
+  )
+
   ipcMain.handle('ai:ack', (_e, runId: string) => {
     const early = unstarted.get(runId)
     if (early) {

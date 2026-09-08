@@ -24,6 +24,8 @@ import { registerDatabaseHandlers } from './ipc/database'
 import { registerProfileHandlers } from './ipc/profile'
 import { registerInfraHandlers } from './ipc/infra'
 import { registerChatHandlers } from './ipc/chats'
+import { resolveReviewServer } from './lib/reviewServer'
+import { openProjectRoot } from './ipc/fs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -216,7 +218,11 @@ app.whenReady().then(() => {
   registerCoverageHandlers()
   // Plugin MCP servers are resolved per run, so the AI console asks for them
   // rather than caching a list that would go stale on enable/disable.
-  registerAiHandlers({ broadcast, mcpServers: plugins.mcpServers })
+  registerAiHandlers({
+    broadcast,
+    mcpServers: plugins.mcpServers,
+    reviewServer: () => resolveReviewServer(broadcast, openProjectRoot),
+  })
   registerShellHandlers({ broadcast })
   registerHttpHandlers({ broadcast })
   registerE2eHandlers()

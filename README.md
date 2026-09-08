@@ -484,6 +484,32 @@ halfway, and together they would produce a plan the loop approves on your behalf
 — an approval gate that approves itself is worse than none. The test gate is the
 check here.
 
+### The assistant can see the app
+
+An agent editing a UI works blind: it reads the source, it runs the tests, and
+the question that matters — does this look right — it cannot ask. Nova hands it
+six tools so it can, automatically, with no setup:
+
+| Tool | What it does |
+|---|---|
+| `open_app` | points the browser pane at a URL |
+| `screenshot_app` | captures the pane to `.nova/review/` for the agent to read |
+| `read_console` | the page's own console output, errors included |
+| `list_run_configs` | how this project starts |
+| `list_devices` · `launch_on_device` | simulators and emulators |
+
+Open, look, read the errors, fix, look again — the loop you were running by hand
+when you screenshotted a bug and pasted it into the chat.
+
+They arrive as an MCP server, the same mechanism plugins use, so both bundled
+CLIs get them through one code path. The server is spawned by the vendor's CLI
+rather than by Nova, so it reaches the editor over a loopback bridge on
+`127.0.0.1` carrying a per-session token — "local only" is not an access control
+on a shared machine.
+
+And `⌘V` in the console attaches an image from the clipboard, so showing the
+assistant a layout bug no longer means saving a file and typing its path.
+
 ### Six assistants, one console
 
 `claude`, `codex` and `opencode` are CLIs Nova drives directly. **Kimi**

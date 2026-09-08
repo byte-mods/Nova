@@ -29,6 +29,9 @@ import type {
 import { applyTheme, defaultThemeId, getTheme } from '@/theme/themes'
 import { basename } from '@/lib/paths'
 import { languageForPath } from '@/lib/language'
+
+/** Console lines kept from the browser pane, for the assistant to read back. */
+const MAX_BROWSER_CONSOLE = 300
 import { lspDidChange, lspDidClose, lspDidOpen, lspDidSave, lspResetDocuments } from '@/lib/lspSync'
 
 export type TabKind =
@@ -510,6 +513,16 @@ interface State {
   /** Set by Stop, so the loop does not start another turn after the kill. */
   aiAutoCancelled: boolean
   /**
+   * Recent console output from the browser pane, oldest first.
+   *
+   * Kept so the assistant can read it: a page that throws on load is the single
+   * most useful thing to hand back when it asks why its change did not work,
+   * and a `<webview>` gets no preload, so this is the only place the messages
+   * can be collected. Bounded, because a page in a render loop would otherwise
+   * grow it without limit.
+   */
+  browserConsole: { level: string; text: string; at: number }[]
+  /**
    * The run the console is currently waiting on.
    *
    * In the store rather than in a component ref because the console unmounts
@@ -651,6 +664,7 @@ interface State {
   setAiRunning: (running: boolean) => void
   setAutoRun: (run: AutoRunState | null) => void
   setAiAutoCancelled: (cancelled: boolean) => void
+  pushBrowserConsole: (level: string, text: string) => void
   setSession: (provider: AiProvider, id: string) => void
   clearConversation: () => void
   loadChats: () => Promise<void>
@@ -770,6 +784,7 @@ export const useStore = create<State>((set, get) => ({
   aiRunning: false,
   autoRun: null,
   aiAutoCancelled: false,
+  browserConsole: [],
   activeRunId: null,
   aiSessionId: noSessions(),
 
@@ -1724,6 +1739,14 @@ export const useStore = create<State>((set, get) => ({
 
   setAiAutoCancelled(cancelled) {
     set({ aiAutoCancelled: cancelled })
+  },
+
+  pushBrowserConsole(level, text) {
+    set((state) => ({
+      browserConsole: [...state.browserConsole, { level, text, at: Date.now() }].slice(
+        -MAX_BROWSER_CONSOLE,
+      ),
+    }))
   },
 
   setAiRunning(running) {

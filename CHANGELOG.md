@@ -14,6 +14,55 @@ The steps for a release are in [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## 1.4.0
+
+### The assistant can look at the app it is changing
+
+An agent editing a UI has been working blind. It can read the source and run the
+tests, but the question that actually matters — *does this look and behave the
+way it should* — it had no way to ask. So it guessed, and you became its eyes:
+run it, screenshot it, paste it back, describe what was wrong.
+
+Nova already had every piece of the answer and none of them were reachable from
+the console. They are now, as six tools the assistant gets automatically:
+
+- **`open_app`** — point the built-in browser pane at a URL
+- **`screenshot_app`** — capture what the pane is showing, as a PNG under
+  `.nova/review/` that the agent then reads
+- **`read_console`** — the page's own console output, errors included
+- **`list_run_configs`** — how this project actually starts
+- **`list_devices`** / **`launch_on_device`** — simulators and emulators
+
+The loop that opens with `open_app`, looks with `screenshot_app`, and checks
+`read_console` is the one you were running by hand.
+
+They arrive as an MCP server, the same mechanism plugins use, so both bundled
+CLIs get them without a second code path. It is spawned by the vendor's CLI
+rather than by Nova — a grandchild process with no way home — so it reaches the
+editor over a loopback HTTP bridge bound to `127.0.0.1` with a per-session
+token. Local is not an access control on a machine with other users on it.
+
+Screenshots come back as a path rather than as bytes: the agent reads images
+from disk, and a base64 PNG through a tool result would burn its context for
+nothing.
+
+### Paste a screenshot straight into the console
+
+`⌘V` in the AI console now attaches an image from the clipboard. A screenshot is
+the fastest way to describe a layout bug, and until now showing one meant saving
+it somewhere by hand and typing the path. Pasting text is untouched — the paste
+is only intercepted when the clipboard actually holds an image.
+
+### The Stop button had walked off the edge
+
+*Keep going* in 1.2.3 added one control too many to the composer's action row.
+The row did not wrap, so on a narrow console the last item — **Stop**, the one
+you need most while a run is going — was pushed past the panel's border and out
+of reach. The row wraps now, the filename truncates instead of shoving, and Send
+and Stop are pinned right without a flexible spacer competing with the wrap.
+
+---
+
 ## 1.3.3
 
 ### GPT-6 Astra

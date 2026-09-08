@@ -152,6 +152,58 @@ export default function BrowserPane({ tabId, initialUrl }: { tabId: string; init
     }
   }, [actions, currentUrl, root])
 
+  /**
+   * Answers the review requests the assistant's tools make.
+   *
+   * Registered here rather than centrally because the answers *are* this pane:
+   * the `<webview>` element, its `webContents` id, and the address bar all live
+   * in this component. A pane that is not mounted simply never answers, and the
+   * bridge times the request out with something the model can act on.
+   */
+  useEffect(() => {
+    const unsubscribe = window.nova.ai.onReviewRequest((raw) => {
+      const request = raw as { id: string; action: string; args: Record<string, unknown> }
+      const view = viewRef.current
+
+      try {
+        switch (request.action) {
+          case 'open': {
+            const url = String(request.args.url ?? '')
+            setAddress(url)
+            setCurrentUrl(url)
+            view?.loadURL(url)
+            void window.nova.ai.reviewReply(request.id, { ok: true })
+            return
+          }
+          case 'contentsId': {
+            // A hidden pane produces no frames, so saying so now beats letting
+            // the capture wait out its timeout and report something misleading.
+            const box = view?.getBoundingClientRect()
+            if (!view || !box || box.width < 2 || box.height < 2) {
+              void window.nova.ai.reviewReply(request.id, { contentsId: 0 })
+              return
+            }
+            void window.nova.ai.reviewReply(request.id, { contentsId: view.getWebContentsId() })
+            return
+          }
+          case 'console': {
+            const limit = Math.max(1, Math.min(500, Number(request.args.limit) || 100))
+            void window.nova.ai.reviewReply(
+              request.id,
+              useStore.getState().browserConsole.slice(-limit),
+            )
+            return
+          }
+          default:
+            void window.nova.ai.reviewReply(request.id, null, `Unknown action ${request.action}`)
+        }
+      } catch (err) {
+        void window.nova.ai.reviewReply(request.id, null, (err as Error).message)
+      }
+    })
+    return unsubscribe
+  }, [])
+
   /** Captures the page and compares it with its stored baseline. */
   const compareVisual = useCallback(async () => {
     const view = viewRef.current
@@ -230,6 +282,17 @@ export default function BrowserPane({ tabId, initialUrl }: { tabId: string; init
      * console line the page writes passes straight through.
      */
     const onConsole = (e: Event) => {
+      // Kept for the assistant regardless of whether anything is recording:
+      // "why did my change not work" is usually answered by the first error the
+      // page threw, and there is nowhere else to read it from.
+      const detail = e as unknown as { message?: string; level?: number }
+      const text = detail.message ?? ''
+      if (text && !text.includes(channelRef.current)) {
+        // Electron's levels are 0=verbose 1=info 2=warning 3=error.
+        const level = ['verbose', 'info', 'warning', 'error'][detail.level ?? 1] ?? 'info'
+        useStore.getState().pushBrowserConsole(level, text.slice(0, 2000))
+      }
+
       // Nothing is listened for unless a recording or a pick is actually in
       // progress. The recorder used to accept messages whenever the pane was
       // open, so a page could add steps to a test the user was not recording.
