@@ -11,9 +11,12 @@ import {
   Paperclip,
   ListChecks,
   MessagesSquare,
+  ListPlus,
   Plus,
   Repeat,
+  RotateCcw,
   Trash2,
+  Zap,
   Sparkles,
   Terminal,
   TriangleAlert,
@@ -37,6 +40,7 @@ import {
   openingPrompt,
   type AutoRunState,
 } from '@/lib/autoRun'
+import { describeQueue, dequeue, enqueue, interrupt, remove } from '@/lib/messageQueue'
 
 export default function AiConsole() {
   const messages = useStore((s) => s.messages)
@@ -57,6 +61,7 @@ export default function AiConsole() {
   const [runId, setRunId] = useState<string | null>(null)
   const [planningEnabled, setPlanningEnabled] = useState(true)
   const autoRun = useStore((s) => s.autoRun)
+  const queue = useStore((s) => s.messageQueue)
   const [showChats, setShowChats] = useState(false)
   const [showPlans, setShowPlans] = useState(false)
   const [localModels, setLocalModels] = useState<string[]>([])
@@ -75,7 +80,9 @@ export default function AiConsole() {
    * that made it. `continueRef` is filled in below, after `startRun` exists.
    */
   const autoRef = useRef<AutoRunState | null>(null)
-  const continueRef = useRef<((prompt: string) => Promise<void>) | null>(null)
+  const continueRef = useRef<((prompt: string, displayText?: string) => Promise<void>) | null>(
+    null,
+  )
   const listRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
 
@@ -177,8 +184,8 @@ export default function AiConsole() {
 
   // The event hook drives continuations through this, so an automatic run's
   // next turn is started by exactly the same path as a typed one.
-  continueRef.current = async (prompt: string) => {
-    await startRun(prompt, 'chat')
+  continueRef.current = async (prompt: string, displayText?: string) => {
+    await startRun(prompt, 'chat', displayText)
   }
 
   /**
@@ -213,9 +220,44 @@ export default function AiConsole() {
     }
   }
 
+  /**
+   * Starts the next queued message once the console is free.
+   *
+   * Driven by the console going idle rather than by the completion event,
+   * because the event is exactly what cannot be relied on: a killed child does
+   * not always produce one, and an interrupt works by killing the child. Keyed
+   * on the state everything else already agrees about, so a queue cannot be
+   * stranded by a message that never arrived.
+   */
+  useEffect(() => {
+    if (running || !root || autoRef.current || !queue.length) return
+
+    const store = useStore.getState()
+    const { next, rest } = dequeue(store.messageQueue)
+    if (!next) return
+
+    store.setMessageQueue(rest)
+    // A resume carries its own instruction and is not something the user typed,
+    // so it is not echoed back into the transcript as a new request.
+    void startRun(next.text, 'chat', next.resume ? undefined : next.label)
+  }, [running, root, queue])
+
   const send = async () => {
     const prompt = input.trim()
-    if (!prompt || running || !root) return
+    if (!prompt || !root) return
+
+    /*
+     * A message typed during a run used to be dropped on the floor: the guard
+     * here returned early, the text vanished, and the only signal was that
+     * nothing happened. It queues now, and drains when the turn ends.
+     */
+    if (running) {
+      const store = useStore.getState()
+      store.setMessageQueue(enqueue(store.messageQueue, prompt))
+      setInput('')
+      return
+    }
+
     setInput('')
 
     /*
@@ -255,6 +297,25 @@ export default function AiConsole() {
     }
     useStore.getState().setPlan(approved)
     await startRun(buildExecutePrompt(approved), 'execute')
+  }
+
+  /**
+   * Stops what the assistant is doing, runs this instead, then goes back.
+   *
+   * The difference from Stop is the second half: the displaced work is queued
+   * behind the interruption rather than abandoned, so cutting in does not cost
+   * the thread. `requestRef` is what the running turn was originally asked for,
+   * which is what the resume prompt restates.
+   */
+  const interruptWith = () => {
+    const prompt = input.trim()
+    if (!prompt || !root || !running) return
+    setInput('')
+
+    const store = useStore.getState()
+    const displaced = autoRef.current?.goal ?? requestRef.current
+    store.setMessageQueue(interrupt(store.messageQueue, prompt, displaced))
+    stop()
   }
 
   const stop = () => {
@@ -534,6 +595,26 @@ export default function AiConsole() {
 
       <div className="ai-composer">
         {autoRun && <AutoRunStrip run={autoRun} />}
+        {queue.length > 0 && (
+          <div className="ai-queue">
+            <span className="ai-queue-head">{describeQueue(queue)}</span>
+            {queue.map((message, index) => (
+              <span key={message.id} className={`chip ${message.resume ? 'resume' : ''}`}>
+                <span className="ai-queue-index">{index + 1}</span>
+                {message.resume && <RotateCcw size={10} />}
+                <span className="ai-queue-text">{message.label}</span>
+                <button
+                  title="Drop this one"
+                  onClick={() =>
+                    useStore.getState().setMessageQueue(remove(queue, message.id))
+                  }
+                >
+                  <X size={10} />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
         {attachments.length > 0 && (
           <div className="ai-attachments">
             {attachments.map((file) => (
@@ -632,9 +713,29 @@ export default function AiConsole() {
               stylesheet rather than by a flexible spacer — a spacer competes
               with wrapping and strands the button on a line of its own. */}
           {running ? (
-            <button className="btn sm" onClick={stop}>
-              <CircleStop size={12} /> Stop
-            </button>
+            <>
+              {input.trim() && (
+                <>
+                  <button
+                    className="btn sm"
+                    onClick={interruptWith}
+                    title="Stop what it is doing, run this instead, then go back to it"
+                  >
+                    <Zap size={12} /> Interrupt
+                  </button>
+                  <button
+                    className="btn primary sm"
+                    onClick={() => void send()}
+                    title="Run this when the current turn finishes"
+                  >
+                    <ListPlus size={12} /> Queue
+                  </button>
+                </>
+              )}
+              <button className="btn sm" onClick={stop}>
+                <CircleStop size={12} /> Stop
+              </button>
+            </>
           ) : (
             <button
               className="btn primary sm"
@@ -895,7 +996,7 @@ function useAiEvents(
   modeRef: { current: 'chat' | 'plan' | 'execute' },
   requestRef: { current: string },
   autoRef: { current: AutoRunState | null },
-  continueRef: { current: ((prompt: string) => Promise<void>) | null },
+  continueRef: { current: ((prompt: string, displayText?: string) => Promise<void>) | null },
 ) {
   // Reset at the start of each turn by the auto-run branch below.
   const changedRef = useRef(0)

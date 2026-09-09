@@ -30,6 +30,7 @@ import { applyTheme, defaultThemeId, getTheme } from '@/theme/themes'
 import { basename } from '@/lib/paths'
 import { languageForPath } from '@/lib/language'
 import { settleMessages } from '@/lib/chatMessages'
+import type { QueuedMessage } from '@/lib/messageQueue'
 
 /** Console lines kept from the browser pane, for the assistant to read back. */
 const MAX_BROWSER_CONSOLE = 300
@@ -524,6 +525,13 @@ interface State {
    */
   browserConsole: { level: string; text: string; at: number }[]
   /**
+   * Messages typed while a turn was running, waiting their turn.
+   *
+   * Not persisted: a queue is about what happens next in this session, and
+   * restoring one on open would fire off work the user typed yesterday.
+   */
+  messageQueue: QueuedMessage[]
+  /**
    * The run the console is currently waiting on.
    *
    * In the store rather than in a component ref because the console unmounts
@@ -666,6 +674,7 @@ interface State {
   setAutoRun: (run: AutoRunState | null) => void
   setAiAutoCancelled: (cancelled: boolean) => void
   pushBrowserConsole: (level: string, text: string) => void
+  setMessageQueue: (queue: QueuedMessage[]) => void
   setSession: (provider: AiProvider, id: string) => void
   clearConversation: () => void
   loadChats: () => Promise<void>
@@ -786,6 +795,7 @@ export const useStore = create<State>((set, get) => ({
   autoRun: null,
   aiAutoCancelled: false,
   browserConsole: [],
+  messageQueue: [],
   activeRunId: null,
   aiSessionId: noSessions(),
 
@@ -1740,6 +1750,10 @@ export const useStore = create<State>((set, get) => ({
 
   setAiAutoCancelled(cancelled) {
     set({ aiAutoCancelled: cancelled })
+  },
+
+  setMessageQueue(queue) {
+    set({ messageQueue: queue })
   },
 
   pushBrowserConsole(level, text) {

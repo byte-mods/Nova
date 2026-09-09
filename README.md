@@ -484,6 +484,19 @@ halfway, and together they would produce a plan the loop approves on your behalf
 — an approval gate that approves itself is worse than none. The test gate is the
 check here.
 
+### Type while it works, and interrupt without losing the thread
+
+A message typed during a run used to vanish. They queue now — type as many as
+you like and each starts when the one before it finishes, listed above the
+composer with a number against each, any of them droppable before it runs.
+
+**Interrupt** is the other half. Queueing is *after this*; interrupting is
+*instead of this, then back to it*: the running turn stops, your message goes
+straight away, and the work it displaced returns to the head of the queue with
+the original request restated and a warning that it was cut off part-way — so it
+checks where it actually got to rather than assuming. Stopping loses the thread;
+interrupting borrows it.
+
 ### The assistant can see the app
 
 An agent editing a UI works blind: it reads the source, it runs the tests, and

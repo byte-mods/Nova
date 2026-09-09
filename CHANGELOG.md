@@ -14,6 +14,39 @@ The steps for a release are in [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## 1.5.0
+
+### Type while it works
+
+A message typed during a run used to be dropped on the floor. The composer's
+guard returned early, the text vanished, and the only signal was that nothing
+happened — so you learned to sit and watch the spinner before typing the next
+thing, which is the opposite of what a text box is for.
+
+Messages queue now. Type as many as you like; each one starts when the turn
+before it finishes, in the order you wrote them. The queue sits above the
+composer with a number against each entry, and any of them can be dropped
+before it runs.
+
+### Interrupt, without losing the thread
+
+Queueing is "after this". **Interrupt** is "instead of this, then back to it" —
+it stops the running turn, sends your message straight away, and puts the work
+it displaced back at the head of the queue so the assistant returns to it
+afterwards. The resume carries the original request and a warning that the work
+was cut off part-way, so it checks the state of the files before continuing
+rather than assuming where it got to.
+
+That last part is the difference between this and Stop. Stopping loses the
+thread; interrupting borrows it.
+
+The queue drains on the console going idle rather than on the completion event,
+deliberately: a killed child does not reliably produce one, and interrupting
+works by killing the child. Keying on the state everything else already agrees
+about means a queue cannot be stranded by a message that never arrived.
+
+---
+
 ## 1.4.1
 
 ### A spinner that never stopped

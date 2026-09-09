@@ -3889,6 +3889,54 @@
 .ai-plan-toggle input:disabled { cursor: not-allowed; }
 .ai-plan-toggle:has(input:disabled) { opacity: 0.45; cursor: not-allowed; }
 
+/* ---------------- queued messages ---------------- */
+
+.ai-queue {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 6px;
+  padding: 5px 7px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-elevated);
+}
+
+.ai-queue-head {
+  width: 100%;
+  color: var(--text-faint);
+  font-size: 10px;
+  margin-bottom: 2px;
+}
+
+.ai-queue .chip {
+  max-width: 100%;
+  gap: 4px;
+}
+
+/* The position is the useful part when several are waiting, so it leads. */
+.ai-queue-index {
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Truncated rather than wrapped: a queued prompt can be a paragraph, and the
+   queue is a list of what is coming, not a second transcript. */
+.ai-queue-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 30ch;
+}
+
+/* Work that was interrupted reads differently from something newly typed —
+   it is being returned to, not queued. */
+.ai-queue .chip.resume {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 /* ---------------- an unattended run ---------------- */
 
 .ai-auto-strip {
